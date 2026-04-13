@@ -1,0 +1,222 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")  // Supabase: connection pooling 우회용 (마이그레이션 시)
+}
+
+// ─── Organization ──────────────────────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  githubOrg String?  @unique
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships OrgMembership[]
+  projects    Project[]
+
+  @@map("organizations")
+}
+
+// ─── User ──────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   // bcrypt hash
+  name         String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships  OrgMembership[]
+  cliTokens    CliToken[]
+  sessions     ClaudeSession[]
+  events       Event[]
+  usageRecords UsageRecord[]
+
+  @@map("users")
+}
+
+// ─── OrgMembership ─────────────────────────────────────────────────────────
+
+model OrgMembership {
+  id        String   @id @default(cuid())
+  userId    String
+  orgId     String
+  role      OrgRole  @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@map("org_memberships")
+}
+
+enum OrgRole {
+  OWNER
+  MEMBER
+}
+
+// ─── CliToken ──────────────────────────────────────────────────────────────
+// ~/.argos/config.json에 저장된 장기 JWT의 revocation 관리
+
+model CliToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique  // SHA-256(JWT), revocation 체크용
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("cli_tokens")
+}
+
+// ─── Project ───────────────────────────────────────────────────────────────
+
+model Project {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  slug      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  sessions     ClaudeSession[]
+  events       Event[]
+  usageRecords UsageRecord[]
+
+  @@unique([orgId, slug])
+  @@map("projects")
+}
+
+// ─── ClaudeSession ─────────────────────────────────────────────────────────
+// Claude Code 세션 하나 = 하나의 row
+// id는 Claude Code의 session_id를 그대로 사용 (중복 방지)
+
+model ClaudeSession {
+  id             String    @id  // Claude Code session_id
+  projectId      String
+  userId         String
+  transcriptPath String?
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events       Event[]
+  usageRecords UsageRecord[]
+  messages     Message[]
+
+  @@index([projectId, startedAt])
+  @@index([userId, startedAt])
+  @@map("claude_sessions")
+}
+
+// ─── Event ─────────────────────────────────────────────────────────────────
+// Claude Code hook 이벤트 하나 = 하나의 row
+// 고빈도 테이블 (팀 10명, 하루 수천 건)
+
+model Event {
+  id           String    @id @default(cuid())
+  sessionId    String
+  userId       String
+  projectId    String
+  eventType    EventType
+  toolName     String?
+  toolInput    Json?
+  toolResponse String?
+  exitCode     Int?
+
+  // 파생 필드 (쿼리 성능을 위해 저장 시 계산)
+  isSkillCall    Boolean @default(false)
+  skillName      String?
+  isSlashCommand Boolean @default(false)  // slash command(/skill-name) vs Skill tool 직접 호출 구분
+  isAgentCall    Boolean @default(false)
+  agentType      String?
+  agentDesc      String?
+  agentId        String? // 서브에이전트 이벤트인 경우 agent_id 값 (최상위 이벤트는 null)
+
+  timestamp DateTime @default(now())
+
+  session ClaudeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, timestamp])
+  @@index([userId, timestamp])
+  @@index([sessionId])
+  @@index([projectId, isSkillCall, timestamp])
+  @@index([projectId, isAgentCall, timestamp])
+  @@map("events")
+}
+
+enum EventType {
+  SESSION_START
+  PRE_TOOL_USE
+  POST_TOOL_USE
+  STOP
+  SUBAGENT_STOP
+}
+
+// ─── UsageRecord ───────────────────────────────────────────────────────────
+// Stop/SubagentStop 이벤트 시 transcript에서 추출한 토큰 사용량
+// 집계 쿼리의 주 대상 테이블
+
+model UsageRecord {
+  id                  String   @id @default(cuid())
+  sessionId           String
+  userId              String
+  projectId           String
+  inputTokens         Int      @default(0)
+  outputTokens        Int      @default(0)
+  cacheCreationTokens Int      @default(0)
+  cacheReadTokens     Int      @default(0)
+  estimatedCostUsd    Float?
+  model               String?
+  isSubagent          Boolean  @default(false)
+  timestamp           DateTime @default(now())
+
+  session ClaudeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, timestamp])
+  @@index([userId, timestamp])
+  @@map("usage_records")
+}
+
+// ─── Message ───────────────────────────────────────────────────────────────
+// 세션별 전체 대화 이력 (transcript.jsonl 파싱 결과)
+// Stop/SubagentStop 이벤트 시 bulk insert
+// 팀 차원의 프롬프트 패턴 분석 및 세션 상세 조회에 사용
+
+model Message {
+  id        String      @id @default(cuid())
+  sessionId String
+  role      MessageRole // HUMAN | ASSISTANT
+  content   String      // text 블록만 저장 (tool_use 제외), 50,000자 truncation
+  sequence  Int         // 세션 내 메시지 순서 (0-based)
+  timestamp DateTime    // transcript 원본 타임스탬프
+
+  session ClaudeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, sequence])
+  @@map("messages")
+}
+
+enum MessageRole {
+  HUMAN
+  ASSISTANT
+}
