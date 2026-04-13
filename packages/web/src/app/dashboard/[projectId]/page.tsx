@@ -10,6 +10,8 @@ import { useDashboardSummary } from '@/hooks/use-dashboard-summary'
 import { useDashboardUsage } from '@/hooks/use-dashboard-usage'
 import { formatTokens, formatCost } from '@/lib/format'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 
 function OverviewContent({ projectId }: { projectId: string }) {
   const searchParams = useSearchParams()
@@ -19,27 +21,94 @@ function OverviewContent({ projectId }: { projectId: string }) {
   const from = searchParams.get('from') || format(thirtyDaysAgo, 'yyyy-MM-dd')
   const to = searchParams.get('to') || format(today, 'yyyy-MM-dd')
 
-  const { data: summary, isLoading: summaryLoading } = useDashboardSummary(projectId, from, to)
-  const { data: usage, isLoading: usageLoading } = useDashboardUsage(projectId, from, to)
+  const { data: summary, isLoading: summaryLoading, error: summaryError, refetch: refetchSummary } = useDashboardSummary(projectId, from, to)
+  const { data: usage, isLoading: usageLoading, error: usageError, refetch: refetchUsage } = useDashboardUsage(projectId, from, to)
 
   if (summaryLoading || usageLoading) {
     return (
       <div className="space-y-6">
-        <Skeleton className="h-8 w-64" />
+        <div className="flex justify-between items-center">
+          <Skeleton className="h-8 w-32" />
+          <Skeleton className="h-10 w-96" />
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
           <Skeleton className="h-32" />
         </div>
-        <Skeleton className="h-80" />
+        <div className="bg-white p-6 rounded-lg shadow">
+          <Skeleton className="h-6 w-48 mb-4" />
+          <Skeleton className="h-80" />
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow">
+          <Skeleton className="h-6 w-32 mb-4" />
+          <div className="space-y-3">
+            <Skeleton className="h-10" />
+            <Skeleton className="h-10" />
+            <Skeleton className="h-10" />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (summaryError || usageError) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold">Overview</h1>
+        <Alert variant="destructive">
+          <AlertDescription className="flex items-center justify-between">
+            <span>데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                refetchSummary()
+                refetchUsage()
+              }}
+            >
+              재시도
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  const hasNoData = !summary || (summary.sessionCount === 0 && summary.activeUserCount === 0)
+
+  if (hasNoData) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h1 className="text-2xl font-bold">Overview</h1>
+          <DateRangePicker />
+        </div>
+
+        <div className="bg-white p-12 rounded-lg shadow text-center">
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">
+            아직 수집된 데이터가 없습니다
+          </h2>
+          <p className="text-gray-600 mb-4">
+            팀원들이 argos를 설정하고 Claude Code를 사용하면 여기에 데이터가 표시됩니다.
+          </p>
+          <a
+            href="https://github.com/your-org/argos#setup"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline inline-flex items-center gap-1"
+          >
+            설정 방법 보기 →
+          </a>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <h1 className="text-2xl font-bold">Overview</h1>
         <DateRangePicker />
       </div>
@@ -68,7 +137,7 @@ function OverviewContent({ projectId }: { projectId: string }) {
         <TokenUsageChart data={usage?.series ?? []} />
       </div>
 
-      <div className="bg-white p-6 rounded-lg shadow">
+      <div className="bg-white p-6 rounded-lg shadow overflow-x-auto">
         <h2 className="text-lg font-semibold mb-4">Top Skills</h2>
         <table className="w-full">
           <thead>
@@ -79,7 +148,7 @@ function OverviewContent({ projectId }: { projectId: string }) {
           </thead>
           <tbody>
             {summary?.topSkills.slice(0, 5).map((skill) => (
-              <tr key={skill.skillName} className="border-b">
+              <tr key={skill.skillName} className="border-b hover:bg-gray-50">
                 <td className="py-2">{skill.skillName}</td>
                 <td className="text-right py-2">{skill.callCount}</td>
               </tr>

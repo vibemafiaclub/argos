@@ -7,6 +7,8 @@ import { DateRangePicker } from '@/components/dashboard/date-range-picker'
 import { useDashboardSessions } from '@/hooks/use-dashboard-sessions'
 import { formatTokens, formatCost, formatDate } from '@/lib/format'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 
 function SessionsContent({ projectId }: { projectId: string }) {
   const router = useRouter()
@@ -17,42 +19,91 @@ function SessionsContent({ projectId }: { projectId: string }) {
   const from = searchParams.get('from') || format(thirtyDaysAgo, 'yyyy-MM-dd')
   const to = searchParams.get('to') || format(today, 'yyyy-MM-dd')
 
-  const { data, isLoading } = useDashboardSessions(projectId, from, to)
+  const { data, isLoading, error, refetch } = useDashboardSessions(projectId, from, to)
 
   if (isLoading) {
-    return <Skeleton className="h-96 w-full" />
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <Skeleton className="h-8 w-32" />
+          <Skeleton className="h-10 w-96" />
+        </div>
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <Skeleton className="h-12 w-full" />
+          {[...Array(10)].map((_, i) => (
+            <Skeleton key={i} className="h-16 w-full" />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold">Sessions</h1>
+        <Alert variant="destructive">
+          <AlertDescription className="flex items-center justify-between">
+            <span>데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.</span>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              재시도
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
   }
 
   const handleRowClick = (sessionId: string) => {
     router.push(`/dashboard/${projectId}/sessions/${sessionId}`)
   }
 
+  if (!data?.sessions || data.sessions.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+          <h1 className="text-2xl font-bold">Sessions</h1>
+          <DateRangePicker />
+        </div>
+
+        <div className="bg-white p-12 rounded-lg shadow text-center">
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">
+            이 기간에 세션이 없습니다
+          </h2>
+          <p className="text-gray-600">
+            날짜 범위를 변경해보세요.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <h1 className="text-2xl font-bold">Sessions</h1>
         <DateRangePicker />
       </div>
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="bg-white rounded-lg shadow overflow-x-auto">
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>
-              <th className="text-left py-3 px-4 font-medium">User</th>
-              <th className="text-left py-3 px-4 font-medium">Started</th>
-              <th className="text-left py-3 px-4 font-medium">Ended</th>
-              <th className="text-right py-3 px-4 font-medium">Input</th>
-              <th className="text-right py-3 px-4 font-medium">Output</th>
-              <th className="text-right py-3 px-4 font-medium">Cost</th>
-              <th className="text-right py-3 px-4 font-medium">Events</th>
+              <th className="text-left py-3 px-4 font-medium whitespace-nowrap">User</th>
+              <th className="text-left py-3 px-4 font-medium whitespace-nowrap">Started</th>
+              <th className="text-left py-3 px-4 font-medium whitespace-nowrap">Ended</th>
+              <th className="text-right py-3 px-4 font-medium whitespace-nowrap">Input</th>
+              <th className="text-right py-3 px-4 font-medium whitespace-nowrap">Output</th>
+              <th className="text-right py-3 px-4 font-medium whitespace-nowrap">Cost</th>
+              <th className="text-right py-3 px-4 font-medium whitespace-nowrap">Events</th>
             </tr>
           </thead>
           <tbody>
-            {data?.sessions.map((session) => (
+            {data.sessions.map((session) => (
               <tr
                 key={session.id}
                 onClick={() => handleRowClick(session.id)}
-                className="border-b hover:bg-gray-50 cursor-pointer"
+                className="border-b hover:bg-gray-50 cursor-pointer transition-colors"
               >
                 <td className="py-3 px-4">{session.userName}</td>
                 <td className="py-3 px-4">{formatDate(session.startedAt)}</td>
@@ -65,13 +116,6 @@ function SessionsContent({ projectId }: { projectId: string }) {
                 <td className="text-right py-3 px-4">{session.eventCount}</td>
               </tr>
             ))}
-            {(!data?.sessions || data.sessions.length === 0) && (
-              <tr>
-                <td colSpan={7} className="py-8 text-center text-gray-500">
-                  No session data yet
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>

@@ -99,7 +99,9 @@
     {
       "phase": 13,
       "name": "web-ux",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-04-14T06:42:43+0900",
+      "completed_at": "2026-04-14T07:15:00+0900"
     },
     {
       "phase": 14,
