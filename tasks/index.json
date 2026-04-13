@@ -4,8 +4,9 @@
       "id": 1,
       "name": "mvp",
       "dir": "1-mvp",
-      "status": "pending",
-      "created_at": "2026-04-14T12:00:00+09:00"
+      "status": "blocked",
+      "created_at": "2026-04-14T12:00:00+09:00",
+      "blocked_at": "2026-04-14T06:58:53+0900"
     }
   ]
 }
