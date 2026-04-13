@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/choesumin/Desktop/dev/vmc/argos/cc-test/test-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/choesumin/Desktop/dev/vmc/argos/cc-test/test-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/choesumin/Desktop/dev/vmc/argos/cc-test/test-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/choesumin/Desktop/dev/vmc/argos/cc-test/test-hook.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/choesumin/Desktop/dev/vmc/argos/cc-test/test-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
