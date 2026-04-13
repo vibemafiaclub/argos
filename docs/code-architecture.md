@@ -44,11 +44,11 @@
 
 **통신 규칙**:
 - CLI → API: Bearer JWT, HTTPS
-- Web (client) → API: Bearer JWT (NextAuth session token 기반), HTTPS
+- Web (client) → API: Bearer JWT (Auth.js 세션에서 추출), HTTPS
 - Web (server) → API: 서비스 내부 호출, `API_URL` env var
 - API → DB: Prisma Client, `DATABASE_URL` (Supabase connection string)
-- Web ↔ GitHub: NextAuth.js (OAuth 2.0 Authorization Code Flow)
-- CLI ↔ GitHub: Web을 통한 polling 방식 (직접 GitHub API 호출 없음)
+- CLI 인증: 이메일/비밀번호 → `POST /api/auth/login` → JWT (브라우저/GitHub 불필요)
+- Web 인증: Auth.js v5 Credentials provider → `POST /api/auth/login` → JWT를 세션에 저장
 
 ---
 
@@ -204,10 +204,9 @@ export default app
 ### 환경 변수 (`env.ts`)
 ```
 DATABASE_URL           Supabase connection string (required)
+DIRECT_URL             Supabase direct connection (마이그레이션 전용, required)
 JWT_SECRET             min 32자 랜덤 문자열 (required)
-GITHUB_CLIENT_ID       GitHub OAuth App (required)
-GITHUB_CLIENT_SECRET   GitHub OAuth App (required)
-WEB_URL                웹 앱 URL, e.g. https://argos.vercel.app (required)
+WEB_URL                웹 앱 URL, e.g. https://argos.vercel.app (CORS 허용, required)
 PORT                   서버 포트 (optional, default: 3001)
 ```
 
@@ -216,15 +215,26 @@ PORT                   서버 포트 (optional, default: 3001)
 POST /api/events
   1. auth 미들웨어: JWT 검증, userId 추출
   2. Zod: 요청 body 검증 (IngestEventSchema)
+     - hook_event_name 필드로 이벤트 유형 판별 (주의: `type` 아님)
   3. 프로젝트 존재 + org 멤버십 확인
   4. ClaudeSession upsert (session_id 기준)
-  5. lib/events.ts: isSkillCall, skillName 등 파생 필드 계산
+  5. lib/events.ts: 파생 필드 계산
+     - isSkillCall: tool_name === "Skill"  → skillName = tool_input.skill
+     - isAgentCall: tool_name === "Agent"  → agentType = tool_input.subagent_type
+     - agentId: hook payload의 agent_id 필드 (서브에이전트 이벤트 식별)
+     - toolInput/toolResponse: JSON → 2,000자 truncation
   6. Event 저장
-  7. usage 필드 있으면 lib/cost.ts로 비용 계산 → UsageRecord 저장
+  7. Stop/SubagentStop 이벤트인 경우:
+     a. transcript_path (Stop) 또는 agent_transcript_path (SubagentStop) 파싱
+     b. type === "assistant" 항목의 message.usage 합산 → lib/cost.ts로 비용 계산
+        → UsageRecord 저장
+     c. type === "human" | "assistant" 항목 순서대로 추출
+        → Message bulk insert (text 블록만, 50,000자 truncation)
   8. 202 Accepted 반환
 ```
 
-모든 DB 쓰기는 단일 트랜잭션으로 처리한다.
+Stop/SubagentStop의 transcript 파싱 및 Message insert는 응답 후 비동기로 처리해 3초 타임아웃 내 응답을 보장한다.
+그 외 DB 쓰기(Event, ClaudeSession upsert)는 단일 트랜잭션으로 처리한다.
 
 ### Dockerfile
 ```dockerfile
@@ -253,11 +263,11 @@ CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
 ## 5. `packages/web`
 
 ### 역할
-팀 대시보드를 제공하는 Next.js 앱. GitHub OAuth 로그인, CLI 인증 페이지, 데이터 시각화.
+팀 대시보드를 제공하는 Next.js 앱. 이메일/비밀번호 로그인, 데이터 시각화.
 
 ### 기술 스택
 - **Framework**: Next.js 15 (App Router)
-- **Auth**: Auth.js v5 (NextAuth) + GitHub provider
+- **Auth**: Auth.js v5 (NextAuth) + Credentials provider (email/password)
 - **스타일**: TailwindCSS v4 + shadcn/ui
 - **차트**: Recharts v2
 - **데이터 페칭**: TanStack Query v5 (client), fetch (server)
@@ -279,12 +289,9 @@ packages/web/
     │   ├── layout.tsx         # 루트 레이아웃 (Providers)
     │   ├── page.tsx           # / (랜딩 → /dashboard 리다이렉트)
     │   ├── login/
-    │   │   └── page.tsx       # GitHub 로그인 버튼
-    │   ├── auth/
-    │   │   ├── cli/
-    │   │   │   └── page.tsx   # CLI 인증 페이지
-    │   │   └── cli/complete/
-    │   │       └── page.tsx   # 인증 완료 페이지
+    │   │   └── page.tsx       # 이메일/비밀번호 로그인 폼
+    │   ├── register/
+    │   │   └── page.tsx       # 회원가입 폼
     │   ├── api/
     │   │   └── auth/
     │   │       └── [...nextauth]/
@@ -330,42 +337,42 @@ packages/web/
 ### 인증 흐름 (`auth.ts`)
 ```typescript
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  providers: [GitHub({
-    clientId: env.GITHUB_CLIENT_ID,
-    clientSecret: env.GITHUB_CLIENT_SECRET,
-  })],
-  callbacks: {
-    async jwt({ token, account, profile }) {
-      if (account?.provider === 'github') {
-        // API에서 argos 사용자 upsert + JWT 발급
-        const res = await fetch(`${env.API_URL}/api/auth/github/callback`, {
+  providers: [
+    Credentials({
+      credentials: {
+        email: { type: 'email' },
+        password: { type: 'password' },
+      },
+      async authorize({ email, password }) {
+        // API 로그인 엔드포인트 호출
+        const res = await fetch(`${env.API_URL}/api/auth/login`, {
           method: 'POST',
-          body: JSON.stringify({
-            sessionId: token.cliSessionId,  // CLI 인증 시에만 존재
-            githubId: profile.id,
-            email: profile.email,
-            name: profile.name,
-            avatarUrl: profile.avatar_url,
-          })
+          body: JSON.stringify({ email, password }),
+          headers: { 'Content-Type': 'application/json' },
         })
-        const { argosToken } = await res.json()
-        token.argosToken = argosToken  // API 요청에 사용할 JWT
+        if (!res.ok) return null
+        const { token, user } = await res.json()
+        return { ...user, argosToken: token }  // session에 argosToken 포함
       }
+    })
+  ],
+  callbacks: {
+    async jwt({ token, user }) {
+      if (user) token.argosToken = (user as any).argosToken
       return token
     },
     async session({ session, token }) {
-      session.argosToken = token.argosToken
+      session.argosToken = token.argosToken as string
       return session
     }
-  }
+  },
+  pages: { signIn: '/login' }
 })
 ```
 
 ### 환경 변수 (`.env.example`)
 ```
 AUTH_SECRET=                          # min 32자 (NextAuth)
-AUTH_GITHUB_ID=
-AUTH_GITHUB_SECRET=
 API_URL=http://localhost:3001         # 서버사이드 API 호출용
 NEXT_PUBLIC_API_URL=http://localhost:3001  # 클라이언트사이드 API 호출용
 ```
@@ -411,7 +418,7 @@ packages/cli/
         ├── hooks-inject.ts # .claude/settings.json hook 주입
         ├── transcript.ts  # transcript.jsonl 토큰 추출 + slash command 감지
         ├── api-client.ts  # fetch wrapper (Authorization 헤더 자동)
-        └── auth-flow.ts   # CLI 인증 polling 로직
+        └── auth-flow.ts   # CLI 이메일/비밀번호 인증 인터랙티브 플로우
 ```
 
 ### `lib/config.ts` — 주요 함수 시그니처

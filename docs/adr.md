@@ -51,29 +51,30 @@ Hono를 사용한다.
 
 ---
 
-## ADR-003: 인증 방식 — GitHub OAuth + 단기 CLI polling 세션
+## ADR-003: 인증 방식 — Email/Password 자체 인증 (GitHub OAuth 미사용)
 
-**상태**: 확정  
+**상태**: 확정 (2026-04-14 수정 — 원래 GitHub OAuth polling 방식에서 변경)  
 **날짜**: 2026-04-14
 
 ### 컨텍스트
-CLI에서 사용자를 인증해야 한다. 터미널에서 GitHub OAuth를 직접 처리하려면 CLI가 GitHub OAuth App의 callback을 받을 수 있어야 하는데, 이는 로컬 포트를 열거나 GitHub Device Flow를 사용해야 한다.
+CLI와 웹 대시보드 모두 사용자 인증이 필요하다. 초기 설계는 GitHub OAuth + 브라우저 polling 방식이었으나, MVP에서는 GitHub OAuth App 설정 없이 빠르게 구축하기 위해 이메일/비밀번호 방식으로 변경한다.
 
 ### 결정
-Web 앱을 중개자로 사용하는 polling 방식을 채택한다:
-1. CLI → API: 단기 세션(sessionId) 생성
-2. CLI → 브라우저: Web의 `/auth/cli?session=<id>` 열기
-3. Web → GitHub OAuth → API: 사용자 정보 + sessionId로 JWT 발급
-4. CLI → API: sessionId로 polling하여 JWT 수령
+Email/Password 자체 인증 방식을 사용한다:
+- `POST /api/auth/register` — 회원가입 (email, password, name)
+- `POST /api/auth/login` — 로그인 → 1년 유효 JWT 발급
+- `POST /api/auth/logout` — CliToken revoke
+- **CLI**: 터미널에서 이메일/비밀번호 직접 입력 → JWT를 `~/.argos/config.json`에 저장
+- **Web**: Auth.js v5 Credentials provider → API 로그인 엔드포인트 호출 → JWT를 세션에 저장
 
 ### 근거
-- CLI가 로컬 포트를 열 필요가 없다 (방화벽, 권한 문제 없음).
-- GitHub Device Flow 대신 Web이 이미 있으므로 Web을 활용하는 것이 구현이 단순하다.
-- GitHub CLI, Vercel CLI 등 검증된 패턴이다.
+- GitHub OAuth App 등록 없이 즉시 사용 가능 (셀프호스팅 진입 장벽 최소화).
+- CLI polling 방식보다 구현이 단순하고 Web 서버 의존성이 없다.
+- bcrypt + JWT + DB revocation으로 충분한 보안 수준 확보.
 
 ### 트레이드오프
-- Web 서버가 반드시 떠 있어야 CLI 로그인이 가능하다. 셀프호스팅 시 Web도 함께 배포해야 한다.
-- polling 방식이므로 네트워크 비용이 약간 있다 (2초 간격, 최대 10분).
+- GitHub 계정과 통합되지 않아 avatarUrl 등 프로필 정보를 별도 입력해야 한다.
+- v2에서 GitHub/Google OAuth를 추가 provider로 붙일 수 있다.
 
 ---
 
@@ -251,3 +252,31 @@ Web → Vercel, API → Railway로 분리한다.
 ### 트레이드오프
 - 두 플랫폼의 환경 변수를 각각 관리해야 한다.
 - CORS 설정이 필요하다 (Web origin → API). `WEB_URL` env var로 관리한다.
+
+---
+
+## ADR-012: 대화 전체 이력 저장 — Message 모델
+
+**상태**: 확정  
+**날짜**: 2026-04-14
+
+### 컨텍스트
+기존 설계는 hook 이벤트(tool 호출)만 저장하고, 사용자와 Claude의 대화 내용 자체는 기록하지 않았다.
+팀 리더가 팀원의 AI 활용 패턴을 개선하고 관리하려면 실제 대화 내역이 필요하다.
+
+### 결정
+`Message` 모델을 추가해 세션별 전체 대화 이력을 저장한다.
+- Stop/SubagentStop 이벤트 수신 시 `transcript_path`(또는 `agent_transcript_path`)를 파싱
+- `type === "human"` → `role: HUMAN`, `type === "assistant"` → `role: ASSISTANT` (text 블록만)
+- 세션당 모든 메시지를 `sequence` 순서로 bulk insert
+
+### 근거
+- 팀 차원의 프롬프트 패턴 분석 및 AI 활용 코칭에 필요한 원본 데이터.
+- transcript JSONL은 이미 Stop 이벤트 시 파싱하므로 추가 I/O 비용이 없음.
+- 세션 상세 페이지에서 대화 전체 조회 가능.
+
+### 트레이드오프
+- 스토리지 증가 (약 1.8M 행/년 추가, events와 동일 규모).
+- Stop 이벤트 시 bulk insert로 인한 지연 가능 → 비동기 처리로 완화.
+- 프롬프트에 민감 정보(비밀번호, API 키 등)가 포함될 수 있음 → 접근 권한은 org 멤버로 제한.
+- 어시스턴트 메시지는 tool_use 블록을 제외한 text 블록만 저장 (50,000자 truncation).

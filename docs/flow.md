@@ -13,7 +13,7 @@
       │                               │                              │
   argos 실행                      git clone                    Claude Code 사용
       │                           argos 실행                         │
-  GitHub OAuth                   GitHub OAuth                  hooks 자동 실행
+  이메일/비밀번호 인증             이메일/비밀번호 인증           hooks 자동 실행
       │                               │                              │
   org 자동 생성                   org 자동 합류                  이벤트 수집
   프로젝트 생성                         │                              │
@@ -37,22 +37,13 @@
   │                              ├─ .argos/project.json 확인     │                             │
   │                              │  (없음 → 초기화 필요)          │                             │
   │                              │                                │                             │
-  │                              │  "브라우저에서 GitHub 인증을   │                             │
-  │◀─ 안내 메시지 ───────────────┤   완료해주세요..."             │                             │
-  │                              │                                │                             │
-  │                              ├─ POST /api/auth/cli/session ──────────────────────────────▶│
-  │                              │◀─ { sessionId, authUrl } ──────────────────────────────────┤
-  │                              ├─ 브라우저 열기 ───────────────▶│                             │
-  │                              │                                │  /auth/cli?session=...      │
-  │                              │                                │  → GitHub OAuth 시작         │
-  │                              ├─ polling 시작 (2초 간격) ──────────────────────────────────▶│
-  │                              │                                │  GitHub 인증 완료            │
-  │                              │                                ├─ POST /api/auth/github/callback ▶│
-  │                              │                                │                             ├─ User upsert
-  │                              │                                │                             ├─ JWT 발급
-  │                              │                                │◀─ { ok: true } ─────────────┤
-  │                              │                                │  "인증 완료! 터미널로 돌아가세요" │
-  │                              │◀─ polling 응답: completed ──────────────────────────────────┤
+  │◀─ "이메일을 입력하세요:" ─────┤                                │                             │
+  ├─ (이메일 입력) ──────────────▶│                                │                             │
+  │◀─ "비밀번호를 입력하세요:" ───┤                                │                             │
+  ├─ (비밀번호 입력) ────────────▶│                                │                             │
+  │                              ├─ POST /api/auth/login ─────────────────────────────────────▶│
+  │                              │  (실패 시 register 안내)       │                             ├─ JWT 발급
+  │                              │◀─ { token, user } ─────────────────────────────────────────┤
   │                              ├─ ~/.argos/config.json 저장    │                             │
   │                              │                                │                             │
   │                              │  (project.json 없음 → 프로젝트 생성 단계)
@@ -72,7 +63,7 @@
 
 **완료 메시지 예시**:
 ```
-✓ GitHub 인증 완료 (Jane Dev)
+✓ 로그인 완료 (jane@example.com)
 ✓ 조직 생성: jane-dev
 ✓ 프로젝트 생성: my-project
 ✓ .argos/project.json 작성
@@ -103,9 +94,11 @@
   │                              │  projectId: proj_abc123        │                             │
   │                              │  orgId: org_xyz                │                             │
   │                              │                                │                             │
-  │◀─ "브라우저에서 GitHub 인증을 완료해주세요..." ───────────────┤                             │
-  │                              │                                │                             │
-  │                              │  [GitHub OAuth 동일하게 진행]  │                             │
+  │◀─ "이메일을 입력하세요:" ─────┤                                │                             │
+  ├─ (이메일/비밀번호 입력) ──────▶│                                │                             │
+  │                              ├─ POST /api/auth/login ─────────────────────────────────────▶│
+  │                              │◀─ { token, user } ─────────────────────────────────────────┤
+  │                              ├─ ~/.argos/config.json 저장    │                             │
   │                              │                                │                             │
   │                              ├─ POST /api/orgs/:orgId/members ─────────────────────────────▶│
   │                              │  (org 자동 합류)               │                             ├─ Membership 생성
@@ -116,7 +109,7 @@
 
 **완료 메시지 예시**:
 ```
-✓ GitHub 인증 완료 (Bob Kim)
+✓ 로그인 완료 (bob@example.com)
 ✓ 프로젝트 확인: my-project
 ✓ 조직 합류: jane-dev
 
@@ -163,38 +156,36 @@ Hooks:    ✓ .claude/settings.json에 설치됨
 
 ---
 
-## Flow 5 — CLI 인증 흐름 (브라우저 ↔ CLI polling)
+## Flow 5 — CLI 인증 흐름 (이메일/비밀번호)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  CLI (터미널)                                           │
 │                                                         │
-│  1. POST /api/auth/cli/session                          │
-│     ← { sessionId, authUrl }                            │
+│  1. 이메일 입력 프롬프트                                  │
+│     > Email: jane@example.com                           │
 │                                                         │
-│  2. 브라우저 열기                                        │
-│     authUrl = https://argos.sh/auth/cli?session=<id>    │
+│  2. 비밀번호 입력 프롬프트 (입력 시 숨김 처리)             │
+│     > Password: ••••••••                                │
 │                                                         │
-│  3. polling loop (2초 간격, 최대 10분)                   │
-│     GET /api/auth/cli/session/<id>                      │
-│     ├─ { status: "pending" } → 계속 대기                 │
-│     ├─ { status: "completed", token, user } → 저장 후 종료│
-│     └─ { status: "expired" } → 오류 출력 후 종료         │
+│  3. POST /api/auth/login                                │
+│     { email, password }                                 │
+│     ← { token, user }                                   │
+│                                                         │
+│  4. ~/.argos/config.json에 token 저장                   │
+│     { "token": "...", "apiUrl": "..." }                  │
+│                                                         │
+│  ※ 계정이 없는 경우: 로그인 실패 시                       │
+│     "계정이 없습니다. argos register를 실행하세요." 출력  │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│  브라우저 (/auth/cli?session=<id>)                      │
+│  웹 대시보드 (/login)                                   │
 │                                                         │
-│  1. sessionId 쿠키에 저장                                │
-│  2. "GitHub로 연결하기" 버튼 표시                         │
-│  3. 클릭 → GitHub OAuth 시작                            │
-│     callback: /auth/cli/complete                        │
-│                                                         │
-│  /auth/cli/complete:                                    │
-│  1. GitHub 프로필 수신                                   │
-│  2. POST /api/auth/github/callback                      │
-│     { sessionId, githubId, email, name, avatarUrl }     │
-│  3. "인증 완료! 터미널로 돌아가세요." 표시                │
+│  이메일/비밀번호 입력 폼                                  │
+│  → POST /api/auth/login 호출                            │
+│  → JWT를 Auth.js 세션에 저장                            │
+│  → /dashboard로 리다이렉트                              │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -220,8 +211,11 @@ Claude Code                argos hook (자동 실행)              API
      ├─ Stop 이벤트 ───────────────▶│  Stop                     │
      │  transcript_path 포함        ├─ transcript.jsonl 읽기    │
      │                              ├─ 토큰 사용량 추출          │
+     │                              ├─ 대화 메시지 추출          │
+     │                              │  (type=human/assistant)   │
      │                              ├─ POST /api/events ───────▶│
-     │                              │  (usage 포함)             ├─ UsageRecord 저장
+     │                              │  (usage + messages 포함)  ├─ UsageRecord 저장
+     │                              │                           ├─ Message bulk insert
      │◀─ exit 0 ────────────────────┤                           │
 ```
 
@@ -251,8 +245,8 @@ API 미응답 또는 오류
 ### 로그인 후 첫 진입
 ```
 /login
-  └─ "GitHub로 로그인" 클릭
-      └─ GitHub OAuth
+  └─ 이메일/비밀번호 입력 후 로그인
+      └─ Auth.js Credentials → API /api/auth/login
           └─ /dashboard 리다이렉트
               └─ 첫 번째 프로젝트로 자동 이동
                   └─ /dashboard/[projectId]
@@ -286,14 +280,15 @@ API 미응답 또는 오류
 
 ## Flow 8 — 오류 및 엣지 케이스
 
-### CLI: 인증 만료 (10분 이내 GitHub 로그인 미완료)
+### CLI: 로그인 실패 (잘못된 이메일/비밀번호)
 ```
 $ argos
 
-브라우저에서 GitHub 인증을 완료해주세요...
-⠙ 인증 대기 중... (8분 32초 경과)
+이메일: jane@example.com
+비밀번호: ••••••••
 
-✗ 인증이 만료되었습니다. 다시 시도하려면 argos를 실행하세요.
+✗ 이메일 또는 비밀번호가 올바르지 않습니다.
+  계정이 없다면: argos register
 ```
 
 ### CLI: API 서버 미응답
