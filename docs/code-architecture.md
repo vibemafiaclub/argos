@@ -409,7 +409,7 @@ packages/cli/
         ├── config.ts      # ~/.argos/config.json 읽기/쓰기
         ├── project.ts     # .argos/project.json 탐색/읽기/쓰기
         ├── hooks-inject.ts # .claude/settings.json hook 주입
-        ├── transcript.ts  # transcript.jsonl 토큰 추출
+        ├── transcript.ts  # transcript.jsonl 토큰 추출 + slash command 감지
         ├── api-client.ts  # fetch wrapper (Authorization 헤더 자동)
         └── auth-flow.ts   # CLI 인증 polling 로직
 ```
@@ -500,6 +500,17 @@ async function hookCommand() {
 
     const payload = buildPayload(event, project)
 
+    // SessionStart: transcript에서 slash command 호출 여부 감지
+    // /skill-name 방식은 Skill tool hook이 발화되지 않으므로 transcript 파싱으로 보완
+    if (event.hook_event_name === 'SessionStart') {
+      const slashSkill = await detectSlashCommand(event.transcript_path)
+      if (slashSkill) {
+        payload.isSkillCall = true
+        payload.skillName = slashSkill
+        payload.isSlashCommand = true
+      }
+    }
+
     // Stop/SubagentStop: transcript에서 토큰 추출
     if (isStopEvent(event)) {
       payload.usage = await extractUsageFromTranscript(event.transcript_path)
@@ -548,6 +559,33 @@ export function injectHooks(settingsPath: string): 'injected' | 'already_present
   return changed ? 'injected' : 'already_present'
 }
 ```
+
+### `lib/transcript.ts` — 주요 함수
+
+```typescript
+// Stop/SubagentStop: transcript에서 토큰 사용량 합산
+// type == "assistant" 항목의 message.usage 값을 모두 더한다
+export async function extractUsageFromTranscript(transcriptPath: string): Promise<Usage | null>
+
+// SessionStart: slash command 호출 여부 감지
+// transcript의 queue-operation 엔트리에서 content가 '/'로 시작하는 항목을 찾는다
+// 반환값: skill 이름 (e.g. "commit") 또는 null (일반 프롬프트 세션)
+export async function detectSlashCommand(transcriptPath: string): Promise<string | null> {
+  const lines = await readTranscriptLines(transcriptPath)
+  const queueOp = lines.find(
+    l => l.type === 'queue-operation' && typeof l.content === 'string' && l.content.startsWith('/')
+  )
+  if (!queueOp) return null
+  return queueOp.content.slice(1)  // "/commit" → "commit"
+}
+```
+
+**transcript 엔트리 타입 (테스트로 확인된 것)**:
+- `user` — 사용자 메시지. slash command 시 `message.content`에 `<command-name>/skill-name</command-name>` 태그 포함
+- `assistant` — Claude 응답. `message.usage`에 토큰 사용량
+- `queue-operation` — 사용자 입력 원문. slash command 시 `content: "/skill-name"` (가장 이른 감지 시점)
+- `attachment` — hook 오류(`hook_non_blocking_error`), skill 목록(`skill_listing`) 등
+- `last-prompt` — 마지막 프롬프트 메타데이터
 
 ---
 
