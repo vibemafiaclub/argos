@@ -3,6 +3,9 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { errorHandler } from '@/middleware/error'
 import health from '@/routes/health'
+import auth from '@/routes/auth'
+import orgs from '@/routes/orgs'
+import projects from '@/routes/projects'
 import { env } from '@/env'
 
 const app = new Hono()
@@ -12,6 +15,8 @@ app.use('*', logger())
 app.onError(errorHandler)
 
 app.route('/health', health)
-// TODO: 이후 phase에서 라우트 추가
+app.route('/api/auth', auth)
+app.route('/api/orgs', orgs)
+app.route('/api/projects', projects)
 
 export default app
