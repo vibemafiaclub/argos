@@ -1,0 +1,28 @@
+{
+  "name": "argos-ai",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "argos": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc && node scripts/add-shebang.js",
+    "dev": "tsc --watch",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@argos/shared": "workspace:*",
+    "@inquirer/prompts": "^7",
+    "chalk": "^5",
+    "commander": "^12",
+    "ora": "^8"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
