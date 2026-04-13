@@ -92,7 +92,9 @@
     {
       "phase": 12,
       "name": "web-dashboard",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-04-14T04:38:25+0900",
+      "completed_at": "2026-04-14T04:50:00+0900"
     },
     {
       "phase": 13,

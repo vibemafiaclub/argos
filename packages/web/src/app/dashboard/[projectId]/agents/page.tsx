@@ -1,0 +1,77 @@
+'use client'
+
+import { use, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
+import { subDays, format } from 'date-fns'
+import { DateRangePicker } from '@/components/dashboard/date-range-picker'
+import { useDashboardAgents } from '@/hooks/use-dashboard-agents'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+
+function AgentsContent({ projectId }: { projectId: string }) {
+  const searchParams = useSearchParams()
+  const today = new Date()
+  const thirtyDaysAgo = subDays(today, 30)
+
+  const from = searchParams.get('from') || format(thirtyDaysAgo, 'yyyy-MM-dd')
+  const to = searchParams.get('to') || format(today, 'yyyy-MM-dd')
+
+  const { data, isLoading } = useDashboardAgents(projectId, from, to)
+
+  if (isLoading) {
+    return <Skeleton className="h-96 w-full" />
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">Agents</h1>
+        <DateRangePicker />
+      </div>
+
+      {(!data?.agents || data.agents.length === 0) && (
+        <div className="bg-white rounded-lg shadow p-8">
+          <p className="text-center text-gray-500">No agent data yet</p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {data?.agents.map((agent) => (
+          <Card key={agent.agentType}>
+            <CardHeader>
+              <CardTitle className="text-base">{agent.agentType}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Call Count:</span>
+                  <span className="font-semibold">{agent.callCount}</span>
+                </div>
+                {agent.sampleDesc && (
+                  <div className="mt-2 pt-2 border-t">
+                    <p className="text-xs text-gray-500">Sample Description:</p>
+                    <p className="text-sm mt-1 line-clamp-2">{agent.sampleDesc}</p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export default function AgentsPage({
+  params,
+}: {
+  params: Promise<{ projectId: string }>
+}) {
+  const { projectId } = use(params)
+
+  return (
+    <Suspense fallback={<Skeleton className="h-screen w-full" />}>
+      <AgentsContent projectId={projectId} />
+    </Suspense>
+  )
+}

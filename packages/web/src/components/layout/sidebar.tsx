@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useParams, usePathname } from 'next/navigation'
+import { signOut } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
@@ -17,15 +18,19 @@ export function Sidebar() {
   const pathname = usePathname()
   const projectId = params.projectId as string
 
+  const handleLogout = async () => {
+    await signOut({ callbackUrl: '/login' })
+  }
+
   return (
-    <aside className="w-64 border-r bg-muted/40 h-screen sticky top-0">
+    <aside className="w-64 border-r bg-muted/40 h-screen sticky top-0 flex flex-col">
       <div className="p-6">
         <h2 className="text-lg font-semibold">Argos</h2>
       </div>
-      <nav className="px-3 space-y-1">
+      <nav className="px-3 space-y-1 flex-1">
         {navItems.map((item) => {
           const href = `/dashboard/${projectId}${item.href}`
-          const isActive = pathname === href
+          const isActive = pathname === href || (item.href !== '' && pathname.startsWith(href))
           return (
             <Link
               key={item.href}
@@ -42,6 +47,14 @@ export function Sidebar() {
           )
         })}
       </nav>
+      <div className="p-3 border-t">
+        <button
+          onClick={handleLogout}
+          className="w-full px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-md transition-colors"
+        >
+          Log Out
+        </button>
+      </div>
     </aside>
   )
 }
