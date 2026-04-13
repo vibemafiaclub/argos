@@ -1,0 +1,86 @@
+{
+  "project": "argos",
+  "task": "mvp",
+  "prompt": "전부 다 구현한다. 1. 환경변수로만 관리하자. 일단. cli token 정책도 최대한 단순하게 가자. 2. jwt 세션으로 심플하게 ㄱㄱ 3. 최대한 깔끔하고 단순한 디자인으로 사용하자. 라이브러리는 레퍼런스가 많은 것으로 선택한다. shadcn을 권장한다. 4. 당장 supabase project가 있다. mcp로 연결되어있으니 argos 데이터베이스를 쓰면 된다. railway/vercel 배포도 포함해라. 각각 cli를 쓰면된다. 5. 패키지명 확정이다.",
+  "totalPhases": 15,
+  "created_at": "2026-04-14T12:00:00+09:00",
+  "phases": [
+    {
+      "phase": 0,
+      "name": "monorepo-shared",
+      "status": "completed",
+      "started_at": "2026-04-14T03:30:23+0900",
+      "completed_at": "2026-04-14T03:33:00+0900"
+    },
+    {
+      "phase": 1,
+      "name": "api-foundation",
+      "status": "pending"
+    },
+    {
+      "phase": 2,
+      "name": "api-foundation-eval",
+      "status": "pending"
+    },
+    {
+      "phase": 3,
+      "name": "api-auth",
+      "status": "pending"
+    },
+    {
+      "phase": 4,
+      "name": "api-auth-eval",
+      "status": "pending"
+    },
+    {
+      "phase": 5,
+      "name": "api-events",
+      "status": "pending"
+    },
+    {
+      "phase": 6,
+      "name": "api-events-eval",
+      "status": "pending"
+    },
+    {
+      "phase": 7,
+      "name": "api-dashboard",
+      "status": "pending"
+    },
+    {
+      "phase": 8,
+      "name": "api-dashboard-eval",
+      "status": "pending"
+    },
+    {
+      "phase": 9,
+      "name": "cli",
+      "status": "pending"
+    },
+    {
+      "phase": 10,
+      "name": "cli-eval",
+      "status": "pending"
+    },
+    {
+      "phase": 11,
+      "name": "web-foundation",
+      "status": "pending"
+    },
+    {
+      "phase": 12,
+      "name": "web-dashboard",
+      "status": "pending"
+    },
+    {
+      "phase": 13,
+      "name": "web-ux",
+      "status": "pending"
+    },
+    {
+      "phase": 14,
+      "name": "deployment",
+      "status": "pending"
+    }
+  ]
+}

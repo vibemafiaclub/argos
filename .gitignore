@@ -1,1 +1,9 @@
 .omc/
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+.turbo
+pnpm-lock.yaml
