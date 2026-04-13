@@ -64,7 +64,9 @@
     {
       "phase": 8,
       "name": "api-dashboard-eval",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-04-14T04:02:34+0900",
+      "completed_at": "2026-04-14T04:05:15+0900"
     },
     {
       "phase": 9,

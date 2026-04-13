@@ -250,59 +250,33 @@ dashboard.get('/:projectId/skills', async (c) => {
   const toQuery = c.req.query('to')
   const { from, to } = parseDateRange(fromQuery, toQuery)
 
-  const skills = await db.event.groupBy({
-    by: ['skillName'],
-    where: {
-      projectId,
-      isSkillCall: true,
-      skillName: { not: null },
-      timestamp: { gte: from, lte: to }
-    },
-    _count: { id: true },
-    orderBy: { _count: { id: 'desc' } },
-    take: 50
-  })
-
-  const skillNames = skills.map(s => s.skillName!)
-
-  // 각 skill의 slashCommandCount 계산
-  const slashCounts = await db.event.groupBy({
-    by: ['skillName'],
-    where: {
-      projectId,
-      isSkillCall: true,
-      isSlashCommand: true,
-      skillName: { in: skillNames },
-      timestamp: { gte: from, lte: to }
-    },
-    _count: { id: true }
-  })
-
-  const slashCountMap = new Map(
-    slashCounts.map(s => [s.skillName!, s._count.id])
-  )
-
-  // 각 skill의 lastUsedAt 계산
-  const lastUsedAts = await db.event.groupBy({
-    by: ['skillName'],
-    where: {
-      projectId,
-      isSkillCall: true,
-      skillName: { in: skillNames },
-      timestamp: { gte: from, lte: to }
-    },
-    _max: { timestamp: true }
-  })
-
-  const lastUsedMap = new Map(
-    lastUsedAts.map(s => [s.skillName!, s._max.timestamp])
-  )
+  const skills = await db.$queryRaw<Array<{
+    skill_name: string
+    call_count: bigint
+    slash_command_count: bigint
+    last_used_at: Date
+  }>>`
+    SELECT
+      skill_name,
+      COUNT(*) AS call_count,
+      COUNT(CASE WHEN is_slash_command THEN 1 END) AS slash_command_count,
+      MAX(timestamp) AS last_used_at
+    FROM events
+    WHERE project_id = ${projectId}
+      AND is_skill_call = true
+      AND skill_name IS NOT NULL
+      AND timestamp >= ${from}
+      AND timestamp <= ${to}
+    GROUP BY skill_name
+    ORDER BY call_count DESC
+    LIMIT 50
+  `
 
   const skillStats: SkillStat[] = skills.map(s => ({
-    skillName: s.skillName!,
-    callCount: s._count.id,
-    slashCommandCount: slashCountMap.get(s.skillName!) ?? 0,
-    lastUsedAt: lastUsedMap.get(s.skillName!)?.toISOString() ?? new Date().toISOString()
+    skillName: s.skill_name,
+    callCount: Number(s.call_count),
+    slashCommandCount: Number(s.slash_command_count),
+    lastUsedAt: s.last_used_at.toISOString()
   }))
 
   return c.json({ skills: skillStats })
@@ -327,46 +301,49 @@ dashboard.get('/:projectId/agents', async (c) => {
   const toQuery = c.req.query('to')
   const { from, to } = parseDateRange(fromQuery, toQuery)
 
-  const agents = await db.event.groupBy({
-    by: ['agentType'],
-    where: {
-      projectId,
-      isAgentCall: true,
-      agentType: { not: null },
-      timestamp: { gte: from, lte: to }
-    },
-    _count: { id: true },
-    orderBy: { _count: { id: 'desc' } },
-    take: 50
-  })
-
-  const agentTypes = agents.map(a => a.agentType!)
-
-  // 각 agentType의 최근 agentDesc 1개 가져오기
-  const sampleDescs = await Promise.all(
-    agentTypes.map(async (agentType) => {
-      const event = await db.event.findFirst({
-        where: {
-          projectId,
-          isAgentCall: true,
-          agentType,
-          timestamp: { gte: from, lte: to }
-        },
-        orderBy: { timestamp: 'desc' },
-        select: { agentDesc: true }
-      })
-      return { agentType, sampleDesc: event?.agentDesc ?? null }
-    })
-  )
-
-  const descMap = new Map(
-    sampleDescs.map(s => [s.agentType, s.sampleDesc])
-  )
+  const agents = await db.$queryRaw<Array<{
+    agent_type: string
+    call_count: bigint
+    sample_desc: string | null
+  }>>`
+    WITH agent_counts AS (
+      SELECT
+        agent_type,
+        COUNT(*) AS call_count
+      FROM events
+      WHERE project_id = ${projectId}
+        AND is_agent_call = true
+        AND agent_type IS NOT NULL
+        AND timestamp >= ${from}
+        AND timestamp <= ${to}
+      GROUP BY agent_type
+    ),
+    agent_samples AS (
+      SELECT DISTINCT ON (agent_type)
+        agent_type,
+        agent_desc
+      FROM events
+      WHERE project_id = ${projectId}
+        AND is_agent_call = true
+        AND agent_type IS NOT NULL
+        AND timestamp >= ${from}
+        AND timestamp <= ${to}
+      ORDER BY agent_type, timestamp DESC
+    )
+    SELECT
+      ac.agent_type,
+      ac.call_count,
+      ags.agent_desc AS sample_desc
+    FROM agent_counts ac
+    LEFT JOIN agent_samples ags ON ags.agent_type = ac.agent_type
+    ORDER BY ac.call_count DESC
+    LIMIT 50
+  `
 
   const agentStats: AgentStat[] = agents.map(a => ({
-    agentType: a.agentType!,
-    callCount: a._count.id,
-    sampleDesc: descMap.get(a.agentType!) ?? null
+    agentType: a.agent_type,
+    callCount: Number(a.call_count),
+    sampleDesc: a.sample_desc
   }))
 
   return c.json({ agents: agentStats })

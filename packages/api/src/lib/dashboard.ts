@@ -70,5 +70,12 @@ export function parseDateRange(from?: string, to?: string): DateRange {
     toDate = now
   }
 
+  // from > to 검증
+  if (fromDate > toDate) {
+    const temp = fromDate
+    fromDate = toDate
+    toDate = temp
+  }
+
   return { from: fromDate, to: toDate }
 }
