@@ -1,0 +1,5 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "cd ../.. && pnpm --filter @argos/web build",
+  "outputDirectory": "packages/web/.next"
+}

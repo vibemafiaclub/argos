@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+    branches: [main, feat-*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @argos/shared build
+      - run: pnpm --filter @argos/api build
+      - run: pnpm --filter argos-ai build
+      - run: pnpm --filter @argos/web build
+        env:
+          AUTH_SECRET: "ci-placeholder-secret-min-32-chars-here"
+          API_URL: "http://localhost:3001"
+          NEXT_PUBLIC_API_URL: "http://localhost:3001"
