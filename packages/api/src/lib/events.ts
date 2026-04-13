@@ -42,7 +42,7 @@ export function deriveFields(payload: IngestEventPayload): DerivedFields {
   return {
     isSkillCall,
     skillName,
-    isSlashCommand: false, // CLI가 채워서 보내지만 현재 payload에는 없으므로 기본값 false
+    isSlashCommand: payload.isSlashCommand ?? false, // CLI가 채워서 보냄, 없으면 false
     isAgentCall,
     agentType,
     agentDesc,

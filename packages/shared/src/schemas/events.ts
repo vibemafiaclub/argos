@@ -27,6 +27,7 @@ export const IngestEventSchema = z.object({
   toolResponse: z.string().optional(),
   exitCode: z.number().optional(),
   agentId: z.string().optional(),
+  isSlashCommand: z.boolean().optional(),
   usage: UsagePayloadSchema.optional(),
   messages: z.array(MessagePayloadSchema).optional(),
 })

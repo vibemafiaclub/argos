@@ -26,6 +26,7 @@ export interface IngestEventPayload {
   toolResponse?: string   // 2,000자 truncation
   exitCode?: number
   agentId?: string        // 서브에이전트 이벤트인 경우
+  isSlashCommand?: boolean // SessionStart 이벤트 시 CLI가 transcript 파싱해서 설정
   // Stop/SubagentStop에서 CLI가 transcript에서 추출해서 채워 보냄
   usage?: UsagePayload
   messages?: MessagePayload[]
