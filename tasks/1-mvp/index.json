@@ -57,7 +57,9 @@
     {
       "phase": 7,
       "name": "api-dashboard",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-04-14T03:59:44+0900",
+      "completed_at": "2026-04-14T04:10:00+0900"
     },
     {
       "phase": 8,
