@@ -102,25 +102,33 @@ CLI 인증 토큰은 개발자 머신의 `~/.argos/config.json`에 저장된다.
 
 ---
 
-## ADR-005: hook 실행 — argos hook은 항상 exit 0
+## ADR-005: hook 실행 — argos hook은 항상 exit 0, 즉시 종료
 
-**상태**: 확정  
+**상태**: 확정 (2026-04-14 수정 — 백그라운드 프로세스 방식으로 강화)  
 **날짜**: 2026-04-14
 
 ### 컨텍스트
-Claude Code의 hook 스크립트가 non-zero exit code를 반환하면 Claude Code가 해당 hook 이벤트 처리를 중단하거나 사용자에게 경고를 표시한다. `argos hook`이 실패하면 개발자의 작업 흐름이 방해받는다.
+Claude Code의 hook 스크립트가 non-zero exit code를 반환하면 Claude Code가 해당 hook 이벤트 처리를 중단하거나 사용자에게 경고를 표시한다. `argos hook`이 실패하거나 느려지면 개발자의 작업 흐름이 방해받는다. 초기 구현은 `await fetch(..., AbortSignal.timeout(3000))`으로 API 응답을 최대 3초 대기했다.
 
 ### 결정
-`argos hook`은 어떤 상황에서도 `process.exit(0)`으로 종료한다. 모든 에러는 catch 후 `~/.argos/hook-debug.log`에 기록하고 무시한다 (`ARGOS_DEBUG=1` 설정 시).
+`argos hook`은 API 전송을 **완전 비동기**로 처리한다. 로컬 파일 처리(stdin 파싱, transcript 읽기)가 끝나면 **즉시 `process.exit(0)`**을 호출하고, API 전송은 분리된(detached) 자식 프로세스에서 비동기로 수행한다.
+
+구현:
+1. payload를 임시 JSON 파일(`/tmp/argos-*.json`)에 기록
+2. `child_process.spawn`으로 detached Node.js 프로세스 생성 → `child.unref()` (부모와 완전 분리)
+3. 자식 프로세스가 API에 POST 후 임시 파일 삭제
+4. 부모 프로세스는 즉시 `process.exit(0)` 호출
 
 ### 근거
 - Argos는 **옵저버빌리티 도구**다. 관찰 도구가 관찰 대상(Claude Code 사용)을 방해해서는 안 된다.
+- 이전 방식(3초 timeout await)은 API RTT(왕복 지연, 50~150ms)만큼 매 tool 호출마다 Claude Code를 블로킹했다.
 - API 서버 다운, 네트워크 장애, 설정 오류 등으로 이벤트 일부가 유실되는 것은 허용 가능하다.
-- Claude Code 작업 흐름 차단은 절대 허용할 수 없다.
+- Claude Code 작업 흐름 지연은 0ms에 가깝게 유지되어야 한다.
 
 ### 트레이드오프
 - 이벤트 유실 가능성이 있다. 허용되는 트레이드오프로 판단한다.
-- API 요청에 3초 hard timeout을 설정해 Claude Code 응답 지연을 최소화한다.
+- 자식 프로세스 spawn overhead(~5ms)가 있지만, API RTT(50~150ms) 대비 무시 가능한 수준이다.
+- 임시 파일이 비정상 종료 시 `/tmp`에 잔류할 수 있다. OS가 정기적으로 정리한다.
 
 ---
 
@@ -133,10 +141,10 @@ Claude Code의 hook 스크립트가 non-zero exit code를 반환하면 Claude Co
 `argos hook`이 이벤트를 API로 전송할 때 실패 시 재시도 전략이 필요하다.
 
 ### 결정
-재시도 없음. 전송 실패 시 이벤트는 유실된다.
+재시도 없음. 전송 실패 시 이벤트는 유실된다. API 전송은 detached 자식 프로세스에서 수행되며 10초 timeout이 설정되어 있다 (Claude Code 블로킹 없음 — ADR-005 참조).
 
 ### 근거
-- `argos hook`은 Claude Code를 블로킹한다. 재시도 로직은 지연을 증가시킨다.
+- `argos hook`은 Claude Code를 블로킹해서는 안 된다. 재시도 로직은 지연을 증가시킨다.
 - 로컬 큐(파일/SQLite)에 쌓고 백그라운드로 전송하는 방식은 구현 복잡도를 크게 높인다.
 - 통계/트렌드용 데이터에서 소수의 이벤트 유실은 의사결정에 영향을 주지 않는다.
 - 인터넷 연결이 없는 환경(비행기, 오프라인 개발)에서도 Claude Code는 정상 동작해야 한다.
