@@ -4,8 +4,9 @@
       "id": 1,
       "name": "mvp",
       "dir": "1-mvp",
-      "status": "pending",
-      "created_at": "2026-04-14T12:00:00+09:00"
+      "status": "completed",
+      "created_at": "2026-04-14T12:00:00+09:00",
+      "completed_at": "2026-04-14T12:35:15+0900"
     }
   ]
 }
