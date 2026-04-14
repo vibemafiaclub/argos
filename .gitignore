@@ -6,4 +6,4 @@ dist/
 .env
 .env.local
 .turbo
-pnpm-lock.yaml
+.vercel
