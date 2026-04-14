@@ -1,6 +1,6 @@
 {
   "name": "argos-ai",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "bin": {
     "argos": "./dist/index.js"
@@ -13,7 +13,6 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@argos/shared": "workspace:*",
     "@inquirer/prompts": "^7",
     "chalk": "^5",
     "commander": "^12",
