@@ -106,10 +106,9 @@
     {
       "phase": 14,
       "name": "deployment",
-      "status": "blocked",
-      "started_at": "2026-04-14T06:50:59+0900",
-      "blocked_reason": "Supabase database password not available in packages/api/.env (shows [password] placeholder). Required for setting Railway DATABASE_URL and DIRECT_URL environment variables. All deployment configuration files (Dockerfile, railway.toml, vercel.json, CI workflow) have been created successfully.",
-      "blocked_at": "2026-04-14T06:58:53+0900"
+      "status": "completed",
+      "started_at": "2026-04-14T12:30:45+0900",
+      "completed_at": "2026-04-14T12:34:27+0900"
     }
   ]
 }

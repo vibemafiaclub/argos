@@ -1,9 +1,12 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package.json pnpm-workspace.yaml turbo.json ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
 COPY packages/shared ./packages/shared
 COPY packages/api ./packages/api
 RUN npm install -g pnpm && pnpm install --frozen-lockfile
+WORKDIR /app/packages/api
+RUN npx prisma generate
+WORKDIR /app
 RUN pnpm --filter @argos/shared build
 RUN pnpm --filter @argos/api build
 
