@@ -21,4 +21,4 @@ COPY --from=builder /app/packages/shared/node_modules ./packages/shared/node_mod
 ENV NODE_ENV=production
 WORKDIR /app/packages/api
 EXPOSE 3001
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "echo 'Starting migrations...' && ./node_modules/.bin/prisma migrate deploy 2>&1 && echo 'Starting server...' && node dist/index.js"]
