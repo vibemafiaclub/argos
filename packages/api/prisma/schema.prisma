@@ -66,6 +66,21 @@ enum OrgRole {
   MEMBER
 }
 
+// ─── CliAuthRequest ────────────────────────────────────────────────────────
+// 브라우저 기반 CLI 인증 흐름의 pending state 관리
+
+model CliAuthRequest {
+  id        String    @id @default(cuid())
+  state     String    @unique  // CLI가 생성한 랜덤 토큰
+  token     String?            // 승인 후 발급된 JWT
+  approved  Boolean   @default(false)
+  denied    Boolean   @default(false)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  @@map("cli_auth_requests")
+}
+
 // ─── CliToken ──────────────────────────────────────────────────────────────
 // ~/.argos/config.json에 저장된 장기 JWT의 revocation 관리
 

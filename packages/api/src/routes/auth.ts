@@ -1,11 +1,12 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import bcrypt from 'bcryptjs'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { db } from '@/db'
 import { signJwt } from '@/lib/jwt'
 import { authMiddleware } from '@/middleware/auth'
 import { LoginRequestSchema, RegisterRequestSchema } from '@argos/shared'
+import { env } from '@/env'
 
 type Variables = {
   userId: string
@@ -107,6 +108,56 @@ auth.post('/logout', authMiddleware, async (c) => {
   await db.cliToken.update({
     where: { tokenHash },
     data: { revokedAt: new Date() }
+  })
+
+  return c.json({ ok: true })
+})
+
+// POST /api/auth/cli-request — CLI가 브라우저 인증 시작 시 호출
+auth.post('/cli-request', async (c) => {
+  const state = randomBytes(32).toString('hex')
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000) // 15분
+  await db.cliAuthRequest.create({ data: { state, expiresAt } })
+  const authUrl = `${env.WEB_URL}/cli-auth?state=${state}`
+  return c.json({ state, authUrl })
+})
+
+// GET /api/auth/cli-poll — CLI가 승인 대기 시 polling
+auth.get('/cli-poll', async (c) => {
+  const state = c.req.query('state')
+  if (!state) return c.json({ error: 'Missing state' }, 400)
+
+  const req = await db.cliAuthRequest.findUnique({ where: { state } })
+  if (!req) return c.json({ error: 'Not found' }, 404)
+  if (new Date() > req.expiresAt) return c.json({ error: 'Expired' }, 410)
+  if (req.denied) return c.json({ denied: true })
+  if (!req.approved || !req.token) return c.json({ pending: true })
+
+  return c.json({ token: req.token })
+})
+
+// POST /api/auth/cli-callback — 웹에서 사용자가 허용/거부 시 호출
+auth.post('/cli-callback', authMiddleware, async (c) => {
+  const { state, denied } = await c.req.json<{ state: string; denied?: boolean }>()
+  const userId = c.get('userId')
+
+  const req = await db.cliAuthRequest.findUnique({ where: { state } })
+  if (!req || new Date() > req.expiresAt) {
+    return c.json({ error: 'Invalid or expired request' }, 400)
+  }
+
+  if (denied) {
+    await db.cliAuthRequest.update({ where: { state }, data: { denied: true } })
+    return c.json({ ok: true })
+  }
+
+  // 새 JWT 발급 및 CliToken 등록
+  const token = await signJwt(userId)
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+  await db.cliToken.create({ data: { userId, tokenHash } })
+  await db.cliAuthRequest.update({
+    where: { state },
+    data: { approved: true, token },
   })
 
   return c.json({ ok: true })
