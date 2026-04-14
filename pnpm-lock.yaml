@@ -60,9 +60,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@argos/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@inquirer/prompts':
         specifier: ^7
         version: 7.10.1(@types/node@20.19.39)
