@@ -39,14 +39,13 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
 
   // Step 1: Login
   console.log(chalk.dim('→ 로그인'))
-  let spinner = ora('로그인 중...').start()
 
   let loginResponse
   try {
     loginResponse = await deps.auth.login(apiUrl)
-    spinner.succeed(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
+    console.log(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
   } catch (err) {
-    spinner.fail(chalk.red('✗ 로그인 실패'))
+    console.error(chalk.red('✗ 로그인 실패'))
     console.error(err instanceof Error ? err.message : String(err))
     process.exit(1)
   }
@@ -66,7 +65,7 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
   const currentDirName = deps.cwd().split('/').pop() || 'my-project'
   const projectName = await deps.prompt.input('프로젝트 이름을 입력하세요:', currentDirName)
 
-  spinner = ora('프로젝트 생성 중...').start()
+  let spinner = ora('프로젝트 생성 중...').start()
 
   let projectResponse: CreateProjectResponse
   try {
@@ -117,14 +116,12 @@ async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUr
   console.log(chalk.dim(`프로젝트: ${project.projectName}`))
   console.log()
 
-  let spinner = ora('로그인 중...').start()
-
   let loginResponse
   try {
     loginResponse = await deps.auth.login(project.apiUrl || apiUrl)
-    spinner.succeed(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
+    console.log(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
   } catch (err) {
-    spinner.fail(chalk.red('✗ 로그인 실패'))
+    console.error(chalk.red('✗ 로그인 실패'))
     console.error(err instanceof Error ? err.message : String(err))
     process.exit(1)
   }
@@ -138,7 +135,7 @@ async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUr
   })
 
   // Join org
-  spinner = ora('조직 합류 중...').start()
+  const spinner = ora('조직 합류 중...').start()
   try {
     await deps.api.joinOrg(project.orgId, loginResponse.token, project.apiUrl || apiUrl)
     spinner.succeed(chalk.green(`✓ 조직 합류: ${project.orgName}`))
