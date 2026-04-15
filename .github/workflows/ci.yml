@@ -21,6 +21,7 @@ jobs:
       - run: pnpm --filter @argos/shared build
       - run: pnpm --filter @argos/api build
       - run: pnpm --filter argos-ai build
+      - run: pnpm --filter argos-ai test
       - run: pnpm --filter @argos/web build
         env:
           AUTH_SECRET: "ci-placeholder-secret-min-32-chars-here"

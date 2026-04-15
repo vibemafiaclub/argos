@@ -14,7 +14,9 @@
     "build": "tsc && node scripts/add-shebang.js",
     "dev": "tsc --watch",
     "prepublishOnly": "pnpm build",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@inquirer/prompts": "^7",
@@ -24,7 +26,8 @@
   },
   "devDependencies": {
     "@types/node": "^20",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.9"
   },
   "engines": {
     "node": ">=18"

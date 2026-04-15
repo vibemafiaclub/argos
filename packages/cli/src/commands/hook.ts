@@ -110,7 +110,7 @@ function debugLog(message: unknown): void {
 /**
  * Convert snake_case hook_event_name to SCREAMING_SNAKE_CASE EventType
  */
-function convertEventType(hookEventName: string): string {
+export function convertEventType(hookEventName: string): string {
   // SessionStart -> SESSION_START
   // PreToolUse -> PRE_TOOL_USE
   // PostToolUse -> POST_TOOL_USE
@@ -122,7 +122,7 @@ function convertEventType(hookEventName: string): string {
 /**
  * Build IngestEventPayload from hook stdin data
  */
-function buildPayload(
+export function buildPayload(
   event: HookStdinPayload,
   project: { projectId: string; apiUrl: string }
 ): IngestEventPayload {
