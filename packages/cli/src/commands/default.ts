@@ -13,7 +13,7 @@ interface DefaultCommandOptions {
   apiUrl?: string
 }
 
-const DEFAULT_API_URL = 'https://api.argos.sh'
+const DEFAULT_API_URL = 'https://server.argos-ai.xyz'
 
 /**
  * Main command - detects context and runs appropriate flow

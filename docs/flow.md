@@ -150,7 +150,7 @@ $ argos
 사용자:   Jane Dev (jane@example.com)
 프로젝트: my-project (proj_abc123)
 조직:     jane-dev
-API:      https://api.argos.sh
+API:      https://server.argos-ai.xyz
 Hooks:    ✓ .claude/settings.json에 설치됨
 ```
 
@@ -299,7 +299,7 @@ $ argos
 
 브라우저에서 GitHub 인증을 완료해주세요...
 
-✗ API 서버에 연결할 수 없습니다: https://api.argos.sh
+✗ API 서버에 연결할 수 없습니다: https://server.argos-ai.xyz
   셀프호스팅을 사용 중이라면 --api-url 플래그를 확인하세요.
 ```
 

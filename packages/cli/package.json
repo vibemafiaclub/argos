@@ -1,12 +1,15 @@
 {
   "name": "argos-ai",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "type": "module",
   "bin": {
     "argos": "./dist/index.js"
   },
   "main": "./dist/index.js",
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc && node scripts/add-shebang.js",
     "dev": "tsc --watch",
