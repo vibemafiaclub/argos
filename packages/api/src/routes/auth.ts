@@ -138,27 +138,40 @@ auth.get('/cli-poll', async (c) => {
 
 // POST /api/auth/cli-callback — 웹에서 사용자가 허용/거부 시 호출
 auth.post('/cli-callback', authMiddleware, async (c) => {
-  const { state, denied } = await c.req.json<{ state: string; denied?: boolean }>()
+  let body: { state: string; denied?: boolean }
+  try {
+    body = await c.req.json<{ state: string; denied?: boolean }>()
+  } catch {
+    return c.json({ error: 'Invalid request body' }, 400)
+  }
+  const { state, denied } = body
   const userId = c.get('userId')
 
-  const req = await db.cliAuthRequest.findUnique({ where: { state } })
+  let req
+  try {
+    req = await db.cliAuthRequest.findUnique({ where: { state } })
+  } catch {
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+
   if (!req || new Date() > req.expiresAt) {
     return c.json({ error: 'Invalid or expired request' }, 400)
   }
 
   if (denied) {
-    await db.cliAuthRequest.update({ where: { state }, data: { denied: true } })
+    await db.cliAuthRequest.update({ where: { state }, data: { denied: true } }).catch(() => {})
     return c.json({ ok: true })
   }
 
   // 새 JWT 발급 및 CliToken 등록
-  const token = await signJwt(userId)
-  const tokenHash = createHash('sha256').update(token).digest('hex')
-  await db.cliToken.create({ data: { userId, tokenHash } })
-  await db.cliAuthRequest.update({
-    where: { state },
-    data: { approved: true, token },
-  })
+  try {
+    const token = await signJwt(userId)
+    const tokenHash = createHash('sha256').update(token).digest('hex')
+    await db.cliToken.create({ data: { userId, tokenHash } })
+    await db.cliAuthRequest.update({ where: { state }, data: { approved: true, token } })
+  } catch {
+    return c.json({ error: 'Internal server error' }, 500)
+  }
 
   return c.json({ ok: true })
 })

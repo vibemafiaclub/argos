@@ -15,7 +15,16 @@ const app = new Hono()
 const allowedOrigins = env.WEB_URL.split(',').map((u) => u.trim())
 app.use('*', cors({ origin: allowedOrigins }))
 app.use('*', logger())
-app.onError(errorHandler)
+app.onError((err, c) => {
+  // cors() middleware post-processing doesn't run when a handler throws,
+  // so we manually add CORS headers here to prevent browser CORS errors on 5xx.
+  const origin = c.req.header('Origin')
+  if (origin && allowedOrigins.includes(origin)) {
+    c.header('Access-Control-Allow-Origin', origin)
+    c.header('Vary', 'Origin')
+  }
+  return errorHandler(err, c)
+})
 
 app.route('/health', health)
 app.route('/api/auth', auth)
