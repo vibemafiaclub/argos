@@ -12,7 +12,8 @@ import { env } from '@/env'
 
 const app = new Hono()
 
-app.use('*', cors({ origin: env.WEB_URL }))
+const allowedOrigins = env.WEB_URL.split(',').map((u) => u.trim())
+app.use('*', cors({ origin: allowedOrigins }))
 app.use('*', logger())
 app.onError(errorHandler)
 
