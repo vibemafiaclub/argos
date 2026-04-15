@@ -1,15 +1,10 @@
 import { join } from 'path'
-import { input } from '@inquirer/prompts'
 import chalk from 'chalk'
 import ora from 'ora'
-import { readConfig, writeConfig } from '../lib/config.js'
 import type { Config } from '../lib/config.js'
-import { findProjectConfig, writeProjectConfig } from '../lib/project.js'
 import type { ProjectConfig } from '../lib/project.js'
-import { injectHooks } from '../lib/hooks-inject.js'
-import { runLoginFlow } from '../lib/auth-flow.js'
-import { apiRequest } from '../lib/api-client.js'
 import type { CreateProjectResponse } from '@argos/shared'
+import type { ExternalDeps, CommandFactory } from '../deps.js'
 
 interface DefaultCommandOptions {
   apiUrl?: string
@@ -17,30 +12,28 @@ interface DefaultCommandOptions {
 
 const DEFAULT_API_URL = 'https://server.argos-ai.xyz'
 
-/**
- * Main command - detects context and runs appropriate flow
- */
-export async function defaultCommand(options: DefaultCommandOptions): Promise<void> {
-  const config = readConfig()
-  const project = findProjectConfig()
-  const apiUrl = options.apiUrl || DEFAULT_API_URL
+export const makeDefaultCommand: CommandFactory<DefaultCommandOptions> =
+  (deps) => async (options) => {
+    const config = deps.config.read()
+    const project = deps.project.find()
+    const apiUrl = options.apiUrl || DEFAULT_API_URL
 
-  // 4-way branch based on config and project presence
-  if (!config && !project) {
-    await runFullSetup(apiUrl)
-  } else if (!config && project) {
-    await runLoginAndJoin(project, apiUrl)
-  } else if (config && !project) {
-    await runProjectInit(config, apiUrl)
-  } else if (config && project) {
-    await ensureOrgMembershipAndShowStatus(config, project)
+    // 4-way branch based on config and project presence
+    if (!config && !project) {
+      await runFullSetup(deps, apiUrl)
+    } else if (!config && project) {
+      await runLoginAndJoin(deps, project, apiUrl)
+    } else if (config && !project) {
+      await runProjectInit(deps, config, apiUrl)
+    } else if (config && project) {
+      await ensureOrgMembershipAndShowStatus(deps, config, project)
+    }
   }
-}
 
 /**
  * Flow 1: Full setup (login + create project + inject hooks)
  */
-async function runFullSetup(apiUrl: string): Promise<void> {
+async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
   console.log(chalk.bold('Argos 초기 설정'))
   console.log()
 
@@ -50,7 +43,7 @@ async function runFullSetup(apiUrl: string): Promise<void> {
 
   let loginResponse
   try {
-    loginResponse = await runLoginFlow(apiUrl)
+    loginResponse = await deps.auth.login(apiUrl)
     spinner.succeed(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
   } catch (err) {
     spinner.fail(chalk.red('✗ 로그인 실패'))
@@ -59,7 +52,7 @@ async function runFullSetup(apiUrl: string): Promise<void> {
   }
 
   // Save config
-  writeConfig({
+  deps.config.write({
     token: loginResponse.token,
     apiUrl,
     userId: loginResponse.user.id,
@@ -70,22 +63,14 @@ async function runFullSetup(apiUrl: string): Promise<void> {
   console.log()
   console.log(chalk.dim('→ 프로젝트 생성'))
 
-  const currentDirName = process.cwd().split('/').pop() || 'my-project'
-  const projectName = await input({
-    message: '프로젝트 이름을 입력하세요:',
-    default: currentDirName,
-  })
+  const currentDirName = deps.cwd().split('/').pop() || 'my-project'
+  const projectName = await deps.prompt.input('프로젝트 이름을 입력하세요:', currentDirName)
 
   spinner = ora('프로젝트 생성 중...').start()
 
   let projectResponse: CreateProjectResponse
   try {
-    projectResponse = await apiRequest<CreateProjectResponse>(`${apiUrl}/api/projects`, {
-      method: 'POST',
-      body: JSON.stringify({ name: projectName }),
-      token: loginResponse.token,
-      baseUrl: '',
-    })
+    projectResponse = await deps.api.createProject(projectName, loginResponse.token, apiUrl)
     spinner.succeed(chalk.green(`✓ 프로젝트 생성: ${projectResponse.projectName}`))
     console.log(chalk.dim(`  조직: ${projectResponse.orgName}`))
   } catch (err) {
@@ -95,7 +80,7 @@ async function runFullSetup(apiUrl: string): Promise<void> {
   }
 
   // Step 3: Write project config
-  writeProjectConfig({
+  deps.project.write({
     projectId: projectResponse.projectId,
     orgId: projectResponse.orgId,
     orgName: projectResponse.orgName,
@@ -105,8 +90,8 @@ async function runFullSetup(apiUrl: string): Promise<void> {
   console.log(chalk.green('✓ .argos/project.json 작성'))
 
   // Step 4: Inject hooks
-  const settingsPath = join(process.cwd(), '.claude', 'settings.json')
-  const hookResult = injectHooks(settingsPath)
+  const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
+  const hookResult = deps.hooks.inject(settingsPath)
   if (hookResult === 'injected') {
     console.log(chalk.green('✓ Claude Code hooks 설치 완료'))
   } else {
@@ -127,7 +112,7 @@ async function runFullSetup(apiUrl: string): Promise<void> {
 /**
  * Flow 2: Login and join existing org (project.json exists, but not logged in)
  */
-async function runLoginAndJoin(project: ProjectConfig, apiUrl: string): Promise<void> {
+async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUrl: string): Promise<void> {
   console.log(chalk.bold('Argos 로그인'))
   console.log(chalk.dim(`프로젝트: ${project.projectName}`))
   console.log()
@@ -136,7 +121,7 @@ async function runLoginAndJoin(project: ProjectConfig, apiUrl: string): Promise<
 
   let loginResponse
   try {
-    loginResponse = await runLoginFlow(project.apiUrl || apiUrl)
+    loginResponse = await deps.auth.login(project.apiUrl || apiUrl)
     spinner.succeed(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
   } catch (err) {
     spinner.fail(chalk.red('✗ 로그인 실패'))
@@ -145,7 +130,7 @@ async function runLoginAndJoin(project: ProjectConfig, apiUrl: string): Promise<
   }
 
   // Save config
-  writeConfig({
+  deps.config.write({
     token: loginResponse.token,
     apiUrl: project.apiUrl || apiUrl,
     userId: loginResponse.user.id,
@@ -155,11 +140,7 @@ async function runLoginAndJoin(project: ProjectConfig, apiUrl: string): Promise<
   // Join org
   spinner = ora('조직 합류 중...').start()
   try {
-    await apiRequest(`${project.apiUrl || apiUrl}/api/orgs/${project.orgId}/members`, {
-      method: 'POST',
-      token: loginResponse.token,
-      baseUrl: '',
-    })
+    await deps.api.joinOrg(project.orgId, loginResponse.token, project.apiUrl || apiUrl)
     spinner.succeed(chalk.green(`✓ 조직 합류: ${project.orgName}`))
   } catch (err) {
     spinner.fail(chalk.red('✗ 조직 합류 실패'))
@@ -176,30 +157,19 @@ async function runLoginAndJoin(project: ProjectConfig, apiUrl: string): Promise<
 /**
  * Flow 3: Create project (already logged in, but no project.json)
  */
-async function runProjectInit(config: Config, apiUrl: string): Promise<void> {
+async function runProjectInit(deps: ExternalDeps, config: Config, apiUrl: string): Promise<void> {
   console.log(chalk.green(`✓ 로그인됨: ${config.email}`))
   console.log(chalk.dim('→ 이 디렉토리는 아직 Argos 프로젝트가 아닙니다.'))
   console.log()
 
-  const currentDirName = process.cwd().split('/').pop() || 'my-project'
-  const projectName = await input({
-    message: '프로젝트 이름을 입력하세요:',
-    default: currentDirName,
-  })
+  const currentDirName = deps.cwd().split('/').pop() || 'my-project'
+  const projectName = await deps.prompt.input('프로젝트 이름을 입력하세요:', currentDirName)
 
   const spinner = ora('프로젝트 생성 중...').start()
 
   let projectResponse: CreateProjectResponse
   try {
-    projectResponse = await apiRequest<CreateProjectResponse>(
-      `${config.apiUrl || apiUrl}/api/projects`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ name: projectName }),
-        token: config.token,
-        baseUrl: '',
-      }
-    )
+    projectResponse = await deps.api.createProject(projectName, config.token, config.apiUrl || apiUrl)
     spinner.succeed(chalk.green(`✓ 프로젝트 생성: ${projectResponse.projectName}`))
     console.log(chalk.dim(`  조직: ${projectResponse.orgName}`))
   } catch (err) {
@@ -209,7 +179,7 @@ async function runProjectInit(config: Config, apiUrl: string): Promise<void> {
   }
 
   // Write project config
-  writeProjectConfig({
+  deps.project.write({
     projectId: projectResponse.projectId,
     orgId: projectResponse.orgId,
     orgName: projectResponse.orgName,
@@ -219,8 +189,8 @@ async function runProjectInit(config: Config, apiUrl: string): Promise<void> {
   console.log(chalk.green('✓ .argos/project.json 작성'))
 
   // Inject hooks
-  const settingsPath = join(process.cwd(), '.claude', 'settings.json')
-  const hookResult = injectHooks(settingsPath)
+  const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
+  const hookResult = deps.hooks.inject(settingsPath)
   if (hookResult === 'injected') {
     console.log(chalk.green('✓ Claude Code hooks 설치 완료'))
   } else {
@@ -234,16 +204,16 @@ async function runProjectInit(config: Config, apiUrl: string): Promise<void> {
 /**
  * Flow 4: Everything is set up - just verify membership and show status
  */
-async function ensureOrgMembershipAndShowStatus(config: Config, project: ProjectConfig): Promise<void> {
+async function ensureOrgMembershipAndShowStatus(
+  deps: ExternalDeps,
+  config: Config,
+  project: ProjectConfig
+): Promise<void> {
   // Check if user is already a member
   const spinner = ora('멤버십 확인 중...').start()
 
   try {
-    await apiRequest(`${project.apiUrl || config.apiUrl}/api/orgs/${project.orgId}/members`, {
-      method: 'POST',
-      token: config.token,
-      baseUrl: '',
-    })
+    await deps.api.ensureMembership(project.orgId, config.token, project.apiUrl || config.apiUrl)
     spinner.stop()
   } catch {
     spinner.stop()
@@ -259,8 +229,8 @@ async function ensureOrgMembershipAndShowStatus(config: Config, project: Project
   console.log(chalk.dim('API:     ') + (project.apiUrl || config.apiUrl))
 
   // Check hooks
-  const settingsPath = join(process.cwd(), '.claude', 'settings.json')
-  const hookResult = injectHooks(settingsPath)
+  const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
+  const hookResult = deps.hooks.inject(settingsPath)
   if (hookResult === 'injected') {
     console.log(chalk.dim('Hooks:   ') + chalk.green('✓ .claude/settings.json에 설치됨'))
   } else {

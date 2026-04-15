@@ -3,10 +3,11 @@ import { Command } from 'commander'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { defaultCommand } from './commands/default.js'
-import { hookCommand } from './commands/hook.js'
-import { statusCommand } from './commands/status.js'
-import { logoutCommand } from './commands/logout.js'
+import { realDeps } from './adapters.js'
+import { makeDefaultCommand } from './commands/default.js'
+import { makeHookCommand } from './commands/hook.js'
+import { makeStatusCommand } from './commands/status.js'
+import { makeLogoutCommand } from './commands/logout.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -22,25 +23,25 @@ const program = new Command()
   .option('--api-url <url>', 'API URL override (for self-hosting)')
 
 // Default command (argos without subcommand)
-program.action(defaultCommand)
+program.action(makeDefaultCommand(realDeps))
 
 // Hook command (internal - called by Claude Code)
 program
   .command('hook')
   .description('[internal] process hook event from stdin')
-  .action(hookCommand)
+  .action(makeHookCommand(realDeps))
 
 // Status command
 program
   .command('status')
   .description('show current setup status')
-  .action(statusCommand)
+  .action(makeStatusCommand(realDeps))
 
 // Logout command
 program
   .command('logout')
   .description('log out and remove local credentials')
-  .action(logoutCommand)
+  .action(makeLogoutCommand(realDeps))
 
 // Parse and execute
 program.parseAsync(process.argv).catch((err) => {

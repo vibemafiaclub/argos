@@ -4,31 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-// --- module mocks (hoisted before imports) ---
-vi.mock('../lib/config.js', () => ({
-  readConfig: vi.fn(),
-}))
-vi.mock('../lib/project.js', () => ({
-  findProjectConfig: vi.fn(),
-}))
-vi.mock('../lib/transcript.js', () => ({
-  extractUsageFromTranscript: vi.fn(),
-  detectSlashCommand: vi.fn(),
-  extractMessages: vi.fn(),
-}))
-vi.mock('child_process', () => ({
-  spawn: vi.fn(() => ({ unref: vi.fn() })),
-}))
-
-import { convertEventType, buildPayload, hookCommand } from '../commands/hook.js'
-import { readConfig } from '../lib/config.js'
-import { findProjectConfig } from '../lib/project.js'
-import {
-  extractUsageFromTranscript,
-  detectSlashCommand,
-  extractMessages,
-} from '../lib/transcript.js'
-import { spawn } from 'child_process'
+import { convertEventType, buildPayload, makeHookCommand } from '../commands/hook.js'
+import type { ExternalDeps } from '../deps.js'
 
 // ---------------------------------------------------------------------------
 // convertEventType
@@ -124,7 +101,7 @@ describe('buildPayload', () => {
 })
 
 // ---------------------------------------------------------------------------
-// hookCommand — orchestration
+// makeHookCommand — orchestration
 // ---------------------------------------------------------------------------
 
 const MOCK_PROJECT = {
@@ -152,20 +129,58 @@ function setStdin(stream: Readable) {
   Object.defineProperty(process, 'stdin', { value: stream, writable: true, configurable: true })
 }
 
-describe('hookCommand orchestration', () => {
+function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
+  const sendBackground = vi.fn()
+  const extractUsage = vi.fn().mockResolvedValue(null)
+  const detectSlashCommand = vi.fn().mockResolvedValue(null)
+  const extractMessages = vi.fn().mockResolvedValue([])
+
+  return {
+    config: {
+      read: vi.fn().mockReturnValue(MOCK_CONFIG),
+      write: vi.fn(),
+      delete: vi.fn(),
+    },
+    project: {
+      find: vi.fn().mockReturnValue(MOCK_PROJECT),
+      write: vi.fn(),
+    },
+    auth: {
+      login: vi.fn(),
+    },
+    api: {
+      createProject: vi.fn(),
+      joinOrg: vi.fn(),
+      ensureMembership: vi.fn(),
+      revokeToken: vi.fn(),
+    },
+    hooks: {
+      inject: vi.fn().mockReturnValue('already_present'),
+      fileExists: vi.fn().mockReturnValue(false),
+    },
+    prompt: {
+      input: vi.fn(),
+    },
+    transcript: {
+      extractUsage,
+      detectSlashCommand,
+      extractMessages,
+    },
+    events: {
+      sendBackground,
+    },
+    cwd: vi.fn().mockReturnValue('/test/cwd'),
+    ...overrides,
+  } as ExternalDeps
+}
+
+describe('makeHookCommand orchestration', () => {
   let originalStdin: NodeJS.ReadStream
   let tempDir: string
 
   beforeEach(() => {
     originalStdin = process.stdin
     tempDir = mkdtempSync(join(tmpdir(), 'argos-hook-test-'))
-
-    vi.mocked(readConfig).mockReturnValue(MOCK_CONFIG)
-    vi.mocked(findProjectConfig).mockReturnValue(MOCK_PROJECT)
-    vi.mocked(extractUsageFromTranscript).mockResolvedValue(null)
-    vi.mocked(detectSlashCommand).mockResolvedValue(null)
-    vi.mocked(extractMessages).mockResolvedValue([])
-
     vi.spyOn(process, 'exit').mockImplementation((() => {}) as never)
   })
 
@@ -176,46 +191,54 @@ describe('hookCommand orchestration', () => {
   })
 
   it('always exits with code 0', async () => {
+    const deps = makeMockDeps()
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'x' })))
-    await hookCommand()
+    await makeHookCommand(deps)({})
     expect(process.exit).toHaveBeenCalledWith(0)
   })
 
   it('exits 0 immediately when stdin has no data', async () => {
+    const deps = makeMockDeps()
     const emptyStream = new Readable({ read() {} })
     emptyStream.push(null)
     setStdin(emptyStream)
 
-    await hookCommand()
+    await makeHookCommand(deps)({})
     expect(process.exit).toHaveBeenCalledWith(0)
-    expect(spawn).not.toHaveBeenCalled()
+    expect(deps.events.sendBackground).not.toHaveBeenCalled()
   })
 
   it('exits 0 immediately when project config is missing', async () => {
-    vi.mocked(findProjectConfig).mockReturnValue(null)
+    const deps = makeMockDeps({
+      project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
+    })
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'Stop', session_id: 'x' })))
 
-    await hookCommand()
+    await makeHookCommand(deps)({})
     expect(process.exit).toHaveBeenCalledWith(0)
-    expect(spawn).not.toHaveBeenCalled()
+    expect(deps.events.sendBackground).not.toHaveBeenCalled()
   })
 
   it('exits 0 immediately when user config is missing', async () => {
-    vi.mocked(readConfig).mockReturnValue(null)
+    const deps = makeMockDeps({
+      config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
+    })
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'Stop', session_id: 'x' })))
 
-    await hookCommand()
+    await makeHookCommand(deps)({})
     expect(process.exit).toHaveBeenCalledWith(0)
-    expect(spawn).not.toHaveBeenCalled()
+    expect(deps.events.sendBackground).not.toHaveBeenCalled()
   })
 
-  it('spawns background process for a valid event', async () => {
+  it('calls sendBackground for a valid event', async () => {
+    const deps = makeMockDeps()
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'x' })))
-    await hookCommand()
-    expect(spawn).toHaveBeenCalled()
+    await makeHookCommand(deps)({})
+    expect(deps.events.sendBackground).toHaveBeenCalled()
   })
 
-  it('calls extractUsageFromTranscript and extractMessages for Stop event', async () => {
+  it('calls extractUsage and extractMessages for Stop event', async () => {
+    const deps = makeMockDeps()
     const transcriptPath = join(tempDir, 'transcript.jsonl')
     writeFileSync(transcriptPath, '', 'utf8')
 
@@ -224,13 +247,14 @@ describe('hookCommand orchestration', () => {
         JSON.stringify({ hook_event_name: 'Stop', session_id: 'x', transcript_path: transcriptPath })
       )
     )
-    await hookCommand()
+    await makeHookCommand(deps)({})
 
-    expect(extractUsageFromTranscript).toHaveBeenCalledWith(transcriptPath)
-    expect(extractMessages).toHaveBeenCalledWith(transcriptPath)
+    expect(deps.transcript.extractUsage).toHaveBeenCalledWith(transcriptPath)
+    expect(deps.transcript.extractMessages).toHaveBeenCalledWith(transcriptPath)
   })
 
-  it('calls extractUsageFromTranscript and extractMessages for SubagentStop event', async () => {
+  it('calls extractUsage and extractMessages for SubagentStop event', async () => {
+    const deps = makeMockDeps()
     const transcriptPath = join(tempDir, 'agent.jsonl')
     writeFileSync(transcriptPath, '', 'utf8')
 
@@ -243,13 +267,14 @@ describe('hookCommand orchestration', () => {
         })
       )
     )
-    await hookCommand()
+    await makeHookCommand(deps)({})
 
-    expect(extractUsageFromTranscript).toHaveBeenCalledWith(transcriptPath)
-    expect(extractMessages).toHaveBeenCalledWith(transcriptPath)
+    expect(deps.transcript.extractUsage).toHaveBeenCalledWith(transcriptPath)
+    expect(deps.transcript.extractMessages).toHaveBeenCalledWith(transcriptPath)
   })
 
   it('calls detectSlashCommand for SessionStart event', async () => {
+    const deps = makeMockDeps()
     const transcriptPath = join(tempDir, 'transcript.jsonl')
     writeFileSync(transcriptPath, '', 'utf8')
 
@@ -262,30 +287,34 @@ describe('hookCommand orchestration', () => {
         })
       )
     )
-    await hookCommand()
+    await makeHookCommand(deps)({})
 
-    expect(detectSlashCommand).toHaveBeenCalledWith(transcriptPath)
-    expect(extractUsageFromTranscript).not.toHaveBeenCalled()
+    expect(deps.transcript.detectSlashCommand).toHaveBeenCalledWith(transcriptPath)
+    expect(deps.transcript.extractUsage).not.toHaveBeenCalled()
   })
 
   it('does NOT call transcript functions for PreToolUse event', async () => {
+    const deps = makeMockDeps()
     setStdin(
       makeStdin(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'x', tool_name: 'Bash' }))
     )
-    await hookCommand()
+    await makeHookCommand(deps)({})
 
-    expect(extractUsageFromTranscript).not.toHaveBeenCalled()
-    expect(detectSlashCommand).not.toHaveBeenCalled()
-    expect(extractMessages).not.toHaveBeenCalled()
+    expect(deps.transcript.extractUsage).not.toHaveBeenCalled()
+    expect(deps.transcript.detectSlashCommand).not.toHaveBeenCalled()
+    expect(deps.transcript.extractMessages).not.toHaveBeenCalled()
   })
 
   it('exits 0 even when an unexpected error occurs', async () => {
-    vi.mocked(findProjectConfig).mockImplementation(() => {
-      throw new Error('unexpected failure')
+    const deps = makeMockDeps({
+      project: {
+        find: vi.fn().mockImplementation(() => { throw new Error('unexpected failure') }),
+        write: vi.fn(),
+      },
     })
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'Stop', session_id: 'x' })))
 
-    await hookCommand()
+    await makeHookCommand(deps)({})
     expect(process.exit).toHaveBeenCalledWith(0)
   })
 })
