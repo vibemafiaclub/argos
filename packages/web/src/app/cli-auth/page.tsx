@@ -18,7 +18,7 @@ export default async function CliAuthPage({ searchParams }: Props) {
     redirect(`/login?callbackUrl=/cli-auth?state=${state}`)
   }
 
-  const argosToken = (session as any).argosToken as string
+  const argosToken = session.argosToken
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">

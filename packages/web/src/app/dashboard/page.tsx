@@ -12,7 +12,7 @@ export default async function DashboardPage() {
   try {
     const res = await fetch(`${process.env.API_URL}/api/projects`, {
       headers: {
-        Authorization: `Bearer ${(session as any).argosToken}`,
+        Authorization: `Bearer ${session.argosToken}`,
       },
     })
 
@@ -22,7 +22,7 @@ export default async function DashboardPage() {
         redirect(`/dashboard/${data.projects[0].id}`)
       }
     }
-  } catch (err) {
+  } catch {
     // If API call fails, show empty state
   }
 

@@ -13,10 +13,10 @@ export function useDashboardSessions(projectId: string, from: string, to: string
     queryFn: () =>
       apiGet<{ sessions: SessionItem[] }>(
         `/api/projects/${projectId}/dashboard/sessions?from=${from}&to=${to}`,
-        (session as any)?.argosToken ?? ''
+        session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!(session as any)?.argosToken,
+    enabled: !!session?.argosToken,
   })
 }
 
@@ -28,9 +28,9 @@ export function useSessionDetail(projectId: string, sessionId: string) {
     queryFn: () =>
       apiGet<SessionDetail>(
         `/api/projects/${projectId}/dashboard/sessions/${sessionId}`,
-        (session as any)?.argosToken ?? ''
+        session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!(session as any)?.argosToken && !!sessionId,
+    enabled: !!session?.argosToken && !!sessionId,
   })
 }

@@ -23,7 +23,7 @@ export default async function DashboardLayout({
   try {
     const res = await fetch(`${process.env.API_URL}/api/projects/${projectId}`, {
       headers: {
-        Authorization: `Bearer ${(session as any).argosToken}`,
+        Authorization: `Bearer ${session.argosToken}`,
       },
     })
 
@@ -31,7 +31,7 @@ export default async function DashboardLayout({
       const data = await res.json()
       projectName = data.name
     }
-  } catch (err) {
+  } catch {
     // Use default project name
   }
 

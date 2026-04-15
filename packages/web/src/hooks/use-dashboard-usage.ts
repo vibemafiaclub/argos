@@ -13,9 +13,9 @@ export function useDashboardUsage(projectId: string, from: string, to: string) {
     queryFn: () =>
       apiGet<{ series: UsageSeries[] }>(
         `/api/projects/${projectId}/dashboard/usage?from=${from}&to=${to}`,
-        (session as any)?.argosToken ?? ''
+        session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!(session as any)?.argosToken,
+    enabled: !!session?.argosToken,
   })
 }

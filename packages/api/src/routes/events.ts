@@ -123,7 +123,7 @@ app.post('/', authMiddleware, async (c) => {
             skipDuplicates: true, // 재전송에 대비
           })
         }
-      } catch (err) {
+      } catch {
         // 에러 발생해도 무시 (fire-and-forget)
       }
     })

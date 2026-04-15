@@ -22,11 +22,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, user }) {
-      if (user) token.argosToken = (user as any).argosToken
+      if (user) token.argosToken = user.argosToken
       return token
     },
     async session({ session, token }) {
-      (session as any).argosToken = token.argosToken as string
+      session.argosToken = token.argosToken as string
       return session
     },
   },

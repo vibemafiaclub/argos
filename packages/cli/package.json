@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsc && node scripts/add-shebang.js",
     "dev": "tsc --watch",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "lint": "eslint src"
   },
   "dependencies": {
     "@inquirer/prompts": "^7",

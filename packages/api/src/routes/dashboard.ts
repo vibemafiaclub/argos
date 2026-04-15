@@ -11,7 +11,6 @@ import type {
   SessionItem,
   SessionDetail
 } from '@argos/shared'
-import { Prisma } from '@prisma/client'
 
 type Variables = {
   userId: string

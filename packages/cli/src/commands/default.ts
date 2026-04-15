@@ -1,9 +1,11 @@
 import { join } from 'path'
-import { select, input } from '@inquirer/prompts'
+import { input } from '@inquirer/prompts'
 import chalk from 'chalk'
 import ora from 'ora'
 import { readConfig, writeConfig } from '../lib/config.js'
+import type { Config } from '../lib/config.js'
 import { findProjectConfig, writeProjectConfig } from '../lib/project.js'
+import type { ProjectConfig } from '../lib/project.js'
 import { injectHooks } from '../lib/hooks-inject.js'
 import { runLoginFlow } from '../lib/auth-flow.js'
 import { apiRequest } from '../lib/api-client.js'
@@ -125,7 +127,7 @@ async function runFullSetup(apiUrl: string): Promise<void> {
 /**
  * Flow 2: Login and join existing org (project.json exists, but not logged in)
  */
-async function runLoginAndJoin(project: any, apiUrl: string): Promise<void> {
+async function runLoginAndJoin(project: ProjectConfig, apiUrl: string): Promise<void> {
   console.log(chalk.bold('Argos 로그인'))
   console.log(chalk.dim(`프로젝트: ${project.projectName}`))
   console.log()
@@ -174,7 +176,7 @@ async function runLoginAndJoin(project: any, apiUrl: string): Promise<void> {
 /**
  * Flow 3: Create project (already logged in, but no project.json)
  */
-async function runProjectInit(config: any, apiUrl: string): Promise<void> {
+async function runProjectInit(config: Config, apiUrl: string): Promise<void> {
   console.log(chalk.green(`✓ 로그인됨: ${config.email}`))
   console.log(chalk.dim('→ 이 디렉토리는 아직 Argos 프로젝트가 아닙니다.'))
   console.log()
@@ -232,7 +234,7 @@ async function runProjectInit(config: any, apiUrl: string): Promise<void> {
 /**
  * Flow 4: Everything is set up - just verify membership and show status
  */
-async function ensureOrgMembershipAndShowStatus(config: any, project: any): Promise<void> {
+async function ensureOrgMembershipAndShowStatus(config: Config, project: ProjectConfig): Promise<void> {
   // Check if user is already a member
   const spinner = ora('멤버십 확인 중...').start()
 
@@ -243,7 +245,7 @@ async function ensureOrgMembershipAndShowStatus(config: any, project: any): Prom
       baseUrl: '',
     })
     spinner.stop()
-  } catch (err) {
+  } catch {
     spinner.stop()
     // Ignore error - user might already be a member
   }

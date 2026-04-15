@@ -21,7 +21,7 @@ export function readConfig(): Config | null {
     }
     const content = readFileSync(configPath, 'utf8')
     return JSON.parse(content) as Config
-  } catch (err) {
+  } catch {
     return null
   }
 }
@@ -43,7 +43,7 @@ export function deleteConfig(): void {
     if (existsSync(configPath)) {
       unlinkSync(configPath)
     }
-  } catch (err) {
+  } catch {
     // Ignore errors
   }
 }

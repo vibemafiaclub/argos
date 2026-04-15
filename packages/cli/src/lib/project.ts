@@ -25,7 +25,7 @@ export function findProjectConfig(startDir?: string): ProjectConfig | null {
       try {
         const content = readFileSync(configPath, 'utf8')
         return JSON.parse(content) as ProjectConfig
-      } catch (err) {
+      } catch {
         return null
       }
     }

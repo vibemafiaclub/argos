@@ -13,9 +13,9 @@ export function useDashboardSummary(projectId: string, from: string, to: string)
     queryFn: () =>
       apiGet<DashboardSummary>(
         `/api/projects/${projectId}/dashboard/summary?from=${from}&to=${to}`,
-        (session as any)?.argosToken ?? ''
+        session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!(session as any)?.argosToken,
+    enabled: !!session?.argosToken,
   })
 }

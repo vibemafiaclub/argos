@@ -13,9 +13,9 @@ export function useDashboardSkills(projectId: string, from: string, to: string) 
     queryFn: () =>
       apiGet<{ skills: SkillStat[] }>(
         `/api/projects/${projectId}/dashboard/skills?from=${from}&to=${to}`,
-        (session as any)?.argosToken ?? ''
+        session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!(session as any)?.argosToken,
+    enabled: !!session?.argosToken,
   })
 }

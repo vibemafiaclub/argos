@@ -1,12 +1,12 @@
 import { homedir } from 'os'
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { spawn } from 'child_process'
 import { readConfig } from '../lib/config.js'
 import { findProjectConfig } from '../lib/project.js'
 import { extractUsageFromTranscript, detectSlashCommand, extractMessages } from '../lib/transcript.js'
-import type { IngestEventPayload } from '@argos/shared'
+import type { IngestEventPayload, EventType } from '@argos/shared'
 
 /**
  * Spawn a fully detached background process to POST the event to the API.
@@ -30,7 +30,7 @@ function sendEventBackground(url: string, token: string, payload: IngestEventPay
     })
     child.unref()
   } catch {
-    try { existsSync(tmpFile) && require('fs').unlinkSync(tmpFile) } catch {}
+    try { if (existsSync(tmpFile)) unlinkSync(tmpFile) } catch {}
   }
 }
 
@@ -124,13 +124,12 @@ function convertEventType(hookEventName: string): string {
  */
 function buildPayload(
   event: HookStdinPayload,
-  project: { projectId: string; apiUrl: string },
-  config: { userId: string }
+  project: { projectId: string; apiUrl: string }
 ): IngestEventPayload {
   const payload: IngestEventPayload = {
     projectId: project.projectId,
     sessionId: event.session_id || '',
-    hookEventName: convertEventType(event.hook_event_name || '') as any,
+    hookEventName: convertEventType(event.hook_event_name || '') as EventType,
   }
 
   // Add optional fields
@@ -190,7 +189,7 @@ export async function hookCommand(): Promise<void> {
     }
 
     // Build base payload
-    const payload = buildPayload(event, project, config)
+    const payload = buildPayload(event, project)
 
     // SessionStart: detect slash command
     if (event.hook_event_name === 'SessionStart' && event.transcript_path) {

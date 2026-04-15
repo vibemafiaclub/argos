@@ -23,7 +23,7 @@ export async function logoutCommand(): Promise<void> {
       token: config.token,
       baseUrl: '',
     })
-  } catch (err) {
+  } catch {
     // Ignore API errors - still delete local config
     spinner.warn(chalk.yellow('서버에서 토큰을 취소하는데 실패했지만 로컬 설정은 삭제됩니다.'))
   }

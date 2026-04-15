@@ -37,7 +37,7 @@ export function injectHooks(settingsPath: string): 'injected' | 'already_present
     try {
       const content = readFileSync(settingsPath, 'utf8')
       settings = JSON.parse(content)
-    } catch (err) {
+    } catch {
       // If file is corrupted, start fresh
       settings = {}
     }
