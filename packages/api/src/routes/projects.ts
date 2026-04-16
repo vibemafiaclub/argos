@@ -128,12 +128,14 @@ projects.get('/', async (c) => {
 
   // 해당 org들의 프로젝트 목록
   const projectList = await db.project.findMany({
-    where: { orgId: { in: orgIds } }
+    where: { orgId: { in: orgIds } },
+    include: { organization: true }
   })
 
   const projectsData = projectList.map(p => ({
     id: p.id,
     orgId: p.orgId,
+    orgName: p.organization.name,
     name: p.name,
     slug: p.slug
   }))
