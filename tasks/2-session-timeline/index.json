@@ -22,8 +22,9 @@
     {
       "phase": 2,
       "name": "api-timeline",
-      "status": "pending",
-      "started_at": "2026-04-16T19:21:00+0900"
+      "status": "completed",
+      "started_at": "2026-04-16T19:21:00+0900",
+      "completed_at": "2026-04-16T19:29:00+0900"
     },
     {
       "phase": 3,

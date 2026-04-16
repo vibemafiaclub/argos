@@ -9,7 +9,9 @@ import type {
   SkillStat,
   AgentStat,
   SessionItem,
-  SessionDetail
+  SessionDetail,
+  SessionTimelineUsage,
+  SessionTimelineTool
 } from '@argos/shared'
 
 type Variables = {
@@ -424,8 +426,23 @@ dashboard.get('/sessions/:sessionId', async (c) => {
     where: { id: sessionId },
     include: {
       user: { select: { id: true, name: true } },
-      usageRecords: true,
+      usageRecords: { orderBy: { timestamp: 'asc' } },
       messages: { orderBy: { sequence: 'asc' } },
+      events: {
+        where: {
+          eventType: { in: ['PRE_TOOL_USE', 'POST_TOOL_USE'] },
+        },
+        orderBy: { timestamp: 'asc' },
+        select: {
+          timestamp: true,
+          toolName: true,
+          eventType: true,
+          isSkillCall: true,
+          skillName: true,
+          isAgentCall: true,
+          agentType: true,
+        },
+      },
       _count: { select: { events: true } }
     }
   })
@@ -437,6 +454,25 @@ dashboard.get('/sessions/:sessionId', async (c) => {
   const totalInput = session.usageRecords.reduce((sum, r) => sum + r.inputTokens, 0)
   const totalOutput = session.usageRecords.reduce((sum, r) => sum + r.outputTokens, 0)
   const totalCost = session.usageRecords.reduce((sum, r) => sum + (r.estimatedCostUsd ?? 0), 0)
+
+  const usageTimeline: SessionTimelineUsage[] = session.usageRecords.map((r) => ({
+    timestamp: r.timestamp.toISOString(),
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    estimatedCostUsd: r.estimatedCostUsd ?? 0,
+    model: r.model,
+    isSubagent: r.isSubagent,
+  }))
+
+  const toolEvents: SessionTimelineTool[] = session.events.map((e) => ({
+    timestamp: e.timestamp.toISOString(),
+    toolName: e.toolName ?? 'unknown',
+    eventType: e.eventType as 'PRE_TOOL_USE' | 'POST_TOOL_USE',
+    isSkillCall: e.isSkillCall,
+    skillName: e.skillName,
+    isAgentCall: e.isAgentCall,
+    agentType: e.agentType,
+  }))
 
   const detail: SessionDetail = {
     id: session.id,
@@ -453,7 +489,9 @@ dashboard.get('/sessions/:sessionId', async (c) => {
       content: m.content,
       sequence: m.sequence,
       timestamp: m.timestamp.toISOString()
-    }))
+    })),
+    usageTimeline,
+    toolEvents,
   }
 
   return c.json(detail)

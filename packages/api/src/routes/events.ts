@@ -92,8 +92,25 @@ app.post('/', authMiddleware, async (c) => {
   if (eventType === 'STOP' || eventType === 'SUBAGENT_STOP') {
     setImmediate(async () => {
       try {
-        // usage가 있으면 UsageRecord insert
-        if (payload.usage) {
+        // usagePerTurn이 있으면 per-turn bulk insert (신규)
+        if (payload.usagePerTurn && payload.usagePerTurn.length > 0) {
+          await db.usageRecord.createMany({
+            data: payload.usagePerTurn.map((u) => ({
+              sessionId: payload.sessionId,
+              userId,
+              projectId: payload.projectId,
+              inputTokens: u.inputTokens,
+              outputTokens: u.outputTokens,
+              cacheCreationTokens: u.cacheCreationTokens,
+              cacheReadTokens: u.cacheReadTokens,
+              estimatedCostUsd: calculateCost(u),
+              model: u.model ?? null,
+              isSubagent: eventType === 'SUBAGENT_STOP',
+              timestamp: new Date(u.timestamp),
+            })),
+          })
+        } else if (payload.usage) {
+          // 하위호환: usagePerTurn이 없으면 기존 단일 insert
           await db.usageRecord.create({
             data: {
               sessionId: payload.sessionId,
