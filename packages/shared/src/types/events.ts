@@ -9,6 +9,11 @@ export interface UsagePayload {
   model?: string
 }
 
+/** assistant 턴 1회분의 토큰 사용량 + 타임스탬프 */
+export interface UsagePerTurnPayload extends UsagePayload {
+  timestamp: string // ISO 8601 — transcript의 assistant 메시지 timestamp
+}
+
 export interface MessagePayload {
   role: MessageRole
   content: string   // text 블록만, 50,000자 truncation
@@ -28,6 +33,7 @@ export interface IngestEventPayload {
   agentId?: string        // 서브에이전트 이벤트인 경우
   isSlashCommand?: boolean // SessionStart 이벤트 시 CLI가 transcript 파싱해서 설정
   // Stop/SubagentStop에서 CLI가 transcript에서 추출해서 채워 보냄
-  usage?: UsagePayload
+  usage?: UsagePayload               // 기존 — 전체 합산 (하위호환)
+  usagePerTurn?: UsagePerTurnPayload[] // 신규 — assistant 턴별 개별 usage
   messages?: MessagePayload[]
 }

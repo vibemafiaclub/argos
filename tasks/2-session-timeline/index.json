@@ -1,0 +1,31 @@
+{
+  "project": "argos",
+  "task": "session-timeline",
+  "prompt": "세션 상세 페이지에 Session Timeline 차트를 추가한다. 가로축은 시간이고, 세로축은 토큰 소모량이다. 또 tool 호출 기록이 시점마다 찍힌다. CLI transcript 파싱을 assistant 턴 단위로 쪼개서 UsageRecord를 여러 건 생성하고, 세션 상세 API에서 usageTimeline과 toolEvents를 반환하여 recharts ComposedChart로 시각화한다.",
+  "totalPhases": 4,
+  "created_at": "2026-04-16T15:00:00+09:00",
+  "phases": [
+    {
+      "phase": 0,
+      "name": "shared-types",
+      "status": "completed",
+      "started_at": "2026-04-16T19:12:59+0900",
+      "completed_at": "2026-04-16T19:15:00+0900"
+    },
+    {
+      "phase": 1,
+      "name": "cli-transcript",
+      "status": "pending"
+    },
+    {
+      "phase": 2,
+      "name": "api-timeline",
+      "status": "pending"
+    },
+    {
+      "phase": 3,
+      "name": "web-chart",
+      "status": "pending"
+    }
+  ]
+}

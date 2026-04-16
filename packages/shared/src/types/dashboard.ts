@@ -57,6 +57,29 @@ export interface SessionItem {
   eventCount: number
 }
 
+/** 세션 타임라인 차트용 — UsageRecord 1건에 대응 */
+export interface SessionTimelineUsage {
+  timestamp: string      // ISO 8601
+  inputTokens: number
+  outputTokens: number
+  estimatedCostUsd: number
+  model?: string | null
+  isSubagent: boolean
+}
+
+/** 세션 타임라인 차트용 — tool call 이벤트 1건 */
+export interface SessionTimelineTool {
+  timestamp: string
+  toolName: string
+  eventType: 'PRE_TOOL_USE' | 'POST_TOOL_USE'
+  isSkillCall: boolean
+  skillName?: string | null
+  isAgentCall: boolean
+  agentType?: string | null
+}
+
 export interface SessionDetail extends SessionItem {
   messages: Array<{ role: MessageRole; content: string; sequence: number; timestamp: string }>
+  usageTimeline: SessionTimelineUsage[]   // 신규
+  toolEvents: SessionTimelineTool[]       // 신규
 }

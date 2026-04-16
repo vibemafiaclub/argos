@@ -11,6 +11,10 @@ const UsagePayloadSchema = z.object({
   model: z.string().optional(),
 })
 
+const UsagePerTurnPayloadSchema = UsagePayloadSchema.extend({
+  timestamp: z.string(),
+})
+
 const MessagePayloadSchema = z.object({
   role: MessageRoleEnum,
   content: z.string(),
@@ -29,5 +33,6 @@ export const IngestEventSchema = z.object({
   agentId: z.string().optional(),
   isSlashCommand: z.boolean().optional(),
   usage: UsagePayloadSchema.optional(),
+  usagePerTurn: z.array(UsagePerTurnPayloadSchema).optional(),
   messages: z.array(MessagePayloadSchema).optional(),
 })
