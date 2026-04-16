@@ -1,6 +1,6 @@
 {
   "framework": "nextjs",
   "installCommand": "cd ../.. && pnpm install",
-  "buildCommand": "cd ../.. && pnpm --filter @argos/web build",
+  "buildCommand": "cd ../.. && pnpm turbo build --filter=@argos/web",
   "outputDirectory": ".next"
 }
