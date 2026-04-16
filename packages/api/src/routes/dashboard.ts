@@ -141,12 +141,12 @@ dashboard.get('/usage', async (c) => {
   }>>`
     SELECT
       DATE_TRUNC('day', timestamp)::date AS date,
-      SUM("inputTokens")::int            AS "inputTokens",
-      SUM("outputTokens")::int           AS "outputTokens",
-      SUM("cacheReadTokens")::int       AS "cacheReadTokens",
-      COALESCE(SUM("estimatedCostUsd"), 0) AS "estimatedCostUsd"
+      SUM(input_tokens)::int            AS "inputTokens",
+      SUM(output_tokens)::int           AS "outputTokens",
+      SUM(cache_read_tokens)::int       AS "cacheReadTokens",
+      COALESCE(SUM(estimated_cost_usd), 0) AS "estimatedCostUsd"
     FROM usage_records
-    WHERE "projectId" = ${projectId}
+    WHERE project_id = ${projectId}
       AND timestamp >= ${from}
       AND timestamp <= ${to}
     GROUP BY 1
@@ -179,7 +179,7 @@ dashboard.get('/users', async (c) => {
     const users = await db.$queryRaw<Array<{
       id: string
       name: string
-      avatarUrl: string | null
+      avatar_url: string | null
       session_count: bigint
       input_tokens: bigint | null
       output_tokens: bigint | null
@@ -190,28 +190,28 @@ dashboard.get('/users', async (c) => {
       SELECT
         u.id,
         u.name,
-        u."avatarUrl",
+        u.avatar_url,
         COUNT(DISTINCT s.id) AS session_count,
-        SUM(ur."inputTokens") AS input_tokens,
-        SUM(ur."outputTokens") AS output_tokens,
-        SUM(ur."estimatedCostUsd") AS cost_usd,
-        COUNT(CASE WHEN e."isSkillCall" THEN 1 END) AS skill_calls,
-        COUNT(CASE WHEN e."isAgentCall" THEN 1 END) AS agent_calls
+        SUM(ur.input_tokens) AS input_tokens,
+        SUM(ur.output_tokens) AS output_tokens,
+        SUM(ur.estimated_cost_usd) AS cost_usd,
+        COUNT(CASE WHEN e.is_skill_call THEN 1 END) AS skill_calls,
+        COUNT(CASE WHEN e.is_agent_call THEN 1 END) AS agent_calls
       FROM users u
-      JOIN org_memberships om ON om."userId" = u.id AND om."orgId" = ${orgId}
-      LEFT JOIN usage_records ur ON ur."userId" = u.id AND ur."projectId" = ${projectId}
+      JOIN org_memberships om ON om.user_id = u.id AND om.org_id = ${orgId}
+      LEFT JOIN usage_records ur ON ur.user_id = u.id AND ur.project_id = ${projectId}
         AND ur.timestamp BETWEEN ${from} AND ${to}
-      LEFT JOIN claude_sessions s ON s."userId" = u.id AND s."projectId" = ${projectId}
-        AND s."startedAt" BETWEEN ${from} AND ${to}
-      LEFT JOIN events e ON e."userId" = u.id AND e."projectId" = ${projectId}
+      LEFT JOIN claude_sessions s ON s.user_id = u.id AND s.project_id = ${projectId}
+        AND s.started_at BETWEEN ${from} AND ${to}
+      LEFT JOIN events e ON e.user_id = u.id AND e.project_id = ${projectId}
         AND e.timestamp BETWEEN ${from} AND ${to}
-      GROUP BY u.id, u.name, u."avatarUrl"
+      GROUP BY u.id, u.name, u.avatar_url
     `
 
     const userStats: UserStat[] = users.map(u => ({
       userId: u.id,
       name: u.name,
-      avatarUrl: u.avatarUrl,
+      avatarUrl: u.avatar_url,
       sessionCount: Number(u.session_count),
       inputTokens: Number(u.input_tokens ?? 0),
       outputTokens: Number(u.output_tokens ?? 0),
@@ -250,29 +250,29 @@ dashboard.get('/skills', async (c) => {
   const { from, to } = parseDateRange(fromQuery, toQuery)
 
   const skills = await db.$queryRaw<Array<{
-    skillName: string
+    skill_name: string
     call_count: bigint
     slash_command_count: bigint
     last_used_at: Date
   }>>`
     SELECT
-      "skillName",
+      skill_name,
       COUNT(*) AS call_count,
-      COUNT(CASE WHEN "isSlashCommand" THEN 1 END) AS slash_command_count,
+      COUNT(CASE WHEN is_slash_command THEN 1 END) AS slash_command_count,
       MAX(timestamp) AS last_used_at
     FROM events
-    WHERE "projectId" = ${projectId}
-      AND "isSkillCall" = true
-      AND "skillName" IS NOT NULL
+    WHERE project_id = ${projectId}
+      AND is_skill_call = true
+      AND skill_name IS NOT NULL
       AND timestamp >= ${from}
       AND timestamp <= ${to}
-    GROUP BY "skillName"
+    GROUP BY skill_name
     ORDER BY call_count DESC
     LIMIT 50
   `
 
   const skillStats: SkillStat[] = skills.map(s => ({
-    skillName: s.skillName,
+    skillName: s.skill_name,
     callCount: Number(s.call_count),
     slashCommandCount: Number(s.slash_command_count),
     lastUsedAt: s.last_used_at.toISOString()
@@ -301,46 +301,46 @@ dashboard.get('/agents', async (c) => {
   const { from, to } = parseDateRange(fromQuery, toQuery)
 
   const agents = await db.$queryRaw<Array<{
-    agentType: string
+    agent_type: string
     call_count: bigint
     sample_desc: string | null
   }>>`
     WITH agent_counts AS (
       SELECT
-        "agentType",
+        agent_type,
         COUNT(*) AS call_count
       FROM events
-      WHERE "projectId" = ${projectId}
-        AND "isAgentCall" = true
-        AND "agentType" IS NOT NULL
+      WHERE project_id = ${projectId}
+        AND is_agent_call = true
+        AND agent_type IS NOT NULL
         AND timestamp >= ${from}
         AND timestamp <= ${to}
-      GROUP BY "agentType"
+      GROUP BY agent_type
     ),
     agent_samples AS (
-      SELECT DISTINCT ON ("agentType")
-        "agentType",
-        "agentDesc"
+      SELECT DISTINCT ON (agent_type)
+        agent_type,
+        agent_desc
       FROM events
-      WHERE "projectId" = ${projectId}
-        AND "isAgentCall" = true
-        AND "agentType" IS NOT NULL
+      WHERE project_id = ${projectId}
+        AND is_agent_call = true
+        AND agent_type IS NOT NULL
         AND timestamp >= ${from}
         AND timestamp <= ${to}
-      ORDER BY "agentType", timestamp DESC
+      ORDER BY agent_type, timestamp DESC
     )
     SELECT
-      ac."agentType",
+      ac.agent_type,
       ac.call_count,
-      ags."agentDesc" AS sample_desc
+      ags.agent_desc AS sample_desc
     FROM agent_counts ac
-    LEFT JOIN agent_samples ags ON ags."agentType" = ac."agentType"
+    LEFT JOIN agent_samples ags ON ags.agent_type = ac.agent_type
     ORDER BY ac.call_count DESC
     LIMIT 50
   `
 
   const agentStats: AgentStat[] = agents.map(a => ({
-    agentType: a.agentType,
+    agentType: a.agent_type,
     callCount: Number(a.call_count),
     sampleDesc: a.sample_desc
   }))

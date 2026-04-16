@@ -14,10 +14,10 @@ model Organization {
   id        String   @id @default(cuid())
   name      String
   slug      String   @unique
-  githubOrg String?  @unique
-  avatarUrl String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  githubOrg String?  @unique @map("github_org")
+  avatarUrl String?  @map("avatar_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   memberships OrgMembership[]
   projects    Project[]
@@ -30,11 +30,11 @@ model Organization {
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
-  passwordHash String   // bcrypt hash
+  passwordHash String   @map("password_hash") // bcrypt hash
   name         String
-  avatarUrl    String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  avatarUrl    String?  @map("avatar_url")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   memberships  OrgMembership[]
   cliTokens    CliToken[]
@@ -49,10 +49,10 @@ model User {
 
 model OrgMembership {
   id        String   @id @default(cuid())
-  userId    String
-  orgId     String
+  userId    String   @map("user_id")
+  orgId     String   @map("org_id")
   role      OrgRole  @default(MEMBER)
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @map("created_at")
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
@@ -75,8 +75,8 @@ model CliAuthRequest {
   token     String?            // 승인 후 발급된 JWT
   approved  Boolean   @default(false)
   denied    Boolean   @default(false)
-  expiresAt DateTime
-  createdAt DateTime  @default(now())
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
 
   @@map("cli_auth_requests")
 }
@@ -86,11 +86,11 @@ model CliAuthRequest {
 
 model CliToken {
   id         String    @id @default(cuid())
-  userId     String
-  tokenHash  String    @unique  // SHA-256(JWT), revocation 체크용
-  createdAt  DateTime  @default(now())
-  lastUsedAt DateTime?
-  revokedAt  DateTime?
+  userId     String    @map("user_id")
+  tokenHash  String    @unique @map("token_hash")  // SHA-256(JWT), revocation 체크용
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  revokedAt  DateTime? @map("revoked_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -101,11 +101,11 @@ model CliToken {
 
 model Project {
   id        String   @id @default(cuid())
-  orgId     String
+  orgId     String   @map("org_id")
   name      String
   slug      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   organization Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   sessions     ClaudeSession[]
@@ -122,11 +122,11 @@ model Project {
 
 model ClaudeSession {
   id             String    @id  // Claude Code session_id
-  projectId      String
-  userId         String
-  transcriptPath String?
-  startedAt      DateTime  @default(now())
-  endedAt        DateTime?
+  projectId      String    @map("project_id")
+  userId         String    @map("user_id")
+  transcriptPath String?   @map("transcript_path")
+  startedAt      DateTime  @default(now()) @map("started_at")
+  endedAt        DateTime? @map("ended_at")
 
   project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -145,23 +145,23 @@ model ClaudeSession {
 
 model Event {
   id           String    @id @default(cuid())
-  sessionId    String
-  userId       String
-  projectId    String
-  eventType    EventType
-  toolName     String?
-  toolInput    Json?
-  toolResponse String?
-  exitCode     Int?
+  sessionId    String    @map("session_id")
+  userId       String    @map("user_id")
+  projectId    String    @map("project_id")
+  eventType    EventType @map("event_type")
+  toolName     String?   @map("tool_name")
+  toolInput    Json?     @map("tool_input")
+  toolResponse String?   @map("tool_response")
+  exitCode     Int?      @map("exit_code")
 
   // 파생 필드 (쿼리 성능을 위해 저장 시 계산)
-  isSkillCall    Boolean @default(false)
-  skillName      String?
-  isSlashCommand Boolean @default(false)  // slash command(/skill-name) vs Skill tool 직접 호출 구분
-  isAgentCall    Boolean @default(false)
-  agentType      String?
-  agentDesc      String?
-  agentId        String? // 서브에이전트 이벤트인 경우 agent_id 값 (최상위 이벤트는 null)
+  isSkillCall    Boolean @default(false) @map("is_skill_call")
+  skillName      String? @map("skill_name")
+  isSlashCommand Boolean @default(false) @map("is_slash_command")  // slash command(/skill-name) vs Skill tool 직접 호출 구분
+  isAgentCall    Boolean @default(false) @map("is_agent_call")
+  agentType      String? @map("agent_type")
+  agentDesc      String? @map("agent_desc")
+  agentId        String? @map("agent_id") // 서브에이전트 이벤트인 경우 agent_id 값 (최상위 이벤트는 null)
 
   timestamp DateTime @default(now())
 
@@ -191,16 +191,16 @@ enum EventType {
 
 model UsageRecord {
   id                  String   @id @default(cuid())
-  sessionId           String
-  userId              String
-  projectId           String
-  inputTokens         Int      @default(0)
-  outputTokens        Int      @default(0)
-  cacheCreationTokens Int      @default(0)
-  cacheReadTokens     Int      @default(0)
-  estimatedCostUsd    Float?
+  sessionId           String   @map("session_id")
+  userId              String   @map("user_id")
+  projectId           String   @map("project_id")
+  inputTokens         Int      @default(0) @map("input_tokens")
+  outputTokens        Int      @default(0) @map("output_tokens")
+  cacheCreationTokens Int      @default(0) @map("cache_creation_tokens")
+  cacheReadTokens     Int      @default(0) @map("cache_read_tokens")
+  estimatedCostUsd    Float?   @map("estimated_cost_usd")
   model               String?
-  isSubagent          Boolean  @default(false)
+  isSubagent          Boolean  @default(false) @map("is_subagent")
   timestamp           DateTime @default(now())
 
   session ClaudeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
@@ -219,7 +219,7 @@ model UsageRecord {
 
 model Message {
   id        String      @id @default(cuid())
-  sessionId String
+  sessionId String      @map("session_id")
   role      MessageRole // HUMAN | ASSISTANT
   content   String      // text 블록만 저장 (tool_use 제외), 50,000자 truncation
   sequence  Int         // 세션 내 메시지 순서 (0-based)
