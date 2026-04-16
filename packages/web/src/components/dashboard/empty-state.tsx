@@ -69,7 +69,7 @@ export function EmptyState({ email }: EmptyStateProps) {
               <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-medium">4</span>
               <div>
                 <p className="text-foreground font-medium">Refresh this page</p>
-                <p className="mt-0.5 text-xs">Your project will appear here once it&apos;s created.</p>
+                <p className="mt-0.5 text-xs">Your project will appear here once it has been created.</p>
               </div>
             </li>
           </ol>
