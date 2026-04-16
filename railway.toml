@@ -1,6 +1,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "packages/api/Dockerfile"
+watchPatterns = ["packages/api/**", "packages/shared/**", "package.json", "pnpm-lock.yaml", "turbo.json"]
 
 [deploy]
 healthcheckPath = "/health"
