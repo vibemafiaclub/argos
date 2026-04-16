@@ -10,6 +10,7 @@ export default async function DashboardPage() {
   }
 
   // Fetch first project
+  let redirectTo: string | null = null
   try {
     const res = await fetch(`${process.env.API_URL}/api/projects`, {
       headers: {
@@ -20,11 +21,15 @@ export default async function DashboardPage() {
     if (res.ok) {
       const data = await res.json()
       if (data.projects && data.projects.length > 0) {
-        redirect(`/dashboard/${data.projects[0].id}`)
+        redirectTo = `/dashboard/${data.projects[0].id}`
       }
     }
   } catch {
     // If API call fails, show empty state
+  }
+
+  if (redirectTo) {
+    redirect(redirectTo)
   }
 
   return <EmptyState email={session.user?.email ?? ''} />
