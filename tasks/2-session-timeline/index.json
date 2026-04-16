@@ -15,12 +15,15 @@
     {
       "phase": 1,
       "name": "cli-transcript",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-04-16T19:15:27+0900",
+      "completed_at": "2026-04-16T19:21:00+0900"
     },
     {
       "phase": 2,
       "name": "api-timeline",
-      "status": "pending"
+      "status": "pending",
+      "started_at": "2026-04-16T19:21:00+0900"
     },
     {
       "phase": 3,

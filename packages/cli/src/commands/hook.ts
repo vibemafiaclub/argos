@@ -182,6 +182,16 @@ export const makeHookCommand: CommandFactory =
             payload.usage = usage
           }
 
+          // Extract per-turn usage for session timeline
+          try {
+            const usagePerTurn = await deps.transcript.extractUsagePerTurn(transcriptPath)
+            if (usagePerTurn.length > 0) {
+              payload.usagePerTurn = usagePerTurn
+            }
+          } catch {
+            // Ignore errors - usagePerTurn is optional enhancement
+          }
+
           const messages = await deps.transcript.extractMessages(transcriptPath)
           if (messages.length > 0) {
             payload.messages = messages

@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from 'fs'
-import type { UsagePayload, MessagePayload } from '@argos/shared'
+import type { UsagePayload, UsagePerTurnPayload, MessagePayload } from '@argos/shared'
 
 interface ContentBlock {
   type?: string
@@ -94,6 +94,34 @@ export async function extractUsageFromTranscript(
     cacheReadTokens: totalCacheReadTokens,
     model,
   }
+}
+
+/**
+ * Extract per-assistant-turn usage from transcript.
+ * Returns one UsagePerTurnPayload per "assistant" entry in transcript.jsonl.
+ * Each entry's timestamp comes from the transcript line's timestamp field.
+ */
+export async function extractUsagePerTurn(
+  transcriptPath: string
+): Promise<UsagePerTurnPayload[]> {
+  const lines = await readTranscriptLines(transcriptPath)
+  const results: UsagePerTurnPayload[] = []
+
+  for (const line of lines) {
+    if (line.type === 'assistant' && line.message?.usage) {
+      const usage = line.message.usage
+      results.push({
+        inputTokens: usage.input_tokens || 0,
+        outputTokens: usage.output_tokens || 0,
+        cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+        cacheReadTokens: usage.cache_read_input_tokens || 0,
+        model: line.message.model,
+        timestamp: line.timestamp || new Date().toISOString(),
+      })
+    }
+  }
+
+  return results
 }
 
 /**

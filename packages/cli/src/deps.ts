@@ -1,6 +1,6 @@
 import type { Config } from './lib/config.js'
 import type { ProjectConfig } from './lib/project.js'
-import type { LoginResponse, CreateProjectResponse, IngestEventPayload, UsagePayload, MessagePayload } from '@argos/shared'
+import type { LoginResponse, CreateProjectResponse, IngestEventPayload, UsagePayload, UsagePerTurnPayload, MessagePayload } from '@argos/shared'
 
 export interface ExternalDeps {
   config: {
@@ -30,6 +30,7 @@ export interface ExternalDeps {
   }
   transcript: {
     extractUsage(path: string): Promise<UsagePayload | null>
+    extractUsagePerTurn(path: string): Promise<UsagePerTurnPayload[]>
     detectSlashCommand(path: string): Promise<string | null>
     extractMessages(path: string): Promise<MessagePayload[]>
   }
