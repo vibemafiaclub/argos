@@ -82,6 +82,9 @@ importers:
         specifier: ^8
         version: 8.2.0
     devDependencies:
+      '@argos/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^20
         version: 20.19.39
