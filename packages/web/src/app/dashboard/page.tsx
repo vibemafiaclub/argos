@@ -1,5 +1,6 @@
 import { auth } from '@/auth'
 import { redirect } from 'next/navigation'
+import { EmptyState } from '@/components/dashboard/empty-state'
 
 export default async function DashboardPage() {
   const session = await auth()
@@ -26,14 +27,5 @@ export default async function DashboardPage() {
     // If API call fails, show empty state
   }
 
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="text-center space-y-4">
-        <h1 className="text-2xl font-semibold">Welcome to Argos</h1>
-        <p className="text-muted-foreground">
-          No projects found. Create a project using the CLI to get started.
-        </p>
-      </div>
-    </div>
-  )
+  return <EmptyState email={session.user?.email ?? ''} />
 }
