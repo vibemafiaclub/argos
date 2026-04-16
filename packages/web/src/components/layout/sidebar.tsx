@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useParams, usePathname } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import { cn } from '@/lib/utils'
+import { ProjectSwitcher } from './project-switcher'
 
 const navItems = [
   { label: 'Overview', href: '' },
@@ -28,6 +29,9 @@ export function Sidebar() {
       <aside className="hidden md:flex w-64 border-r bg-muted/40 h-screen sticky top-0 flex-col">
         <div className="p-6">
           <h2 className="text-lg font-semibold">Argos</h2>
+        </div>
+        <div className="px-3 pb-3">
+          <ProjectSwitcher />
         </div>
         <nav className="px-3 space-y-1 flex-1">
           {navItems.map((item) => {
@@ -61,8 +65,11 @@ export function Sidebar() {
 
       {/* Mobile Navigation */}
       <div className="md:hidden sticky top-0 z-10 bg-white border-b">
-        <div className="flex items-center justify-between p-4">
-          <h2 className="text-lg font-semibold">Argos</h2>
+        <div className="flex items-center gap-3 p-4">
+          <h2 className="text-lg font-semibold shrink-0">Argos</h2>
+          <div className="flex-1 min-w-0">
+            <ProjectSwitcher />
+          </div>
           <button
             onClick={handleLogout}
             className="px-3 py-1 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors"
