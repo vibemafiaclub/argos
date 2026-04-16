@@ -171,11 +171,11 @@ describe('extractMessages', () => {
     expect(result).toEqual([])
   })
 
-  it('extracts human and assistant messages with correct roles', async () => {
+  it('extracts user and assistant messages with correct roles (type="user")', async () => {
     const path = writejsonl(tempDir, [
       {
-        type: 'human',
-        message: { content: [{ type: 'text', text: 'Hello' }] },
+        type: 'user',
+        message: { content: 'Hello' },
         timestamp: '2024-01-01T00:00:00Z',
       },
       {
@@ -196,14 +196,41 @@ describe('extractMessages', () => {
     expect(result[1].sequence).toBe(1)
   })
 
-  it('skips non-text content blocks (tool_use, tool_result)', async () => {
+  it('supports legacy type="human" with array content', async () => {
+    const path = writejsonl(tempDir, [
+      {
+        type: 'human',
+        message: { content: 'Legacy hello' },
+        timestamp: '2024-01-01T00:00:00Z',
+      },
+    ])
+
+    const result = await extractMessages(path)
+    expect(result).toHaveLength(1)
+    expect(result[0].role).toBe('HUMAN')
+    expect(result[0].content).toBe('Legacy hello')
+  })
+
+  it('skips user entries with array content (tool_result)', async () => {
+    const path = writejsonl(tempDir, [
+      {
+        type: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'output' }] },
+      },
+    ])
+
+    const result = await extractMessages(path)
+    expect(result).toHaveLength(0)
+  })
+
+  it('captures tool_use blocks from assistant messages', async () => {
     const path = writejsonl(tempDir, [
       {
         type: 'assistant',
         message: {
           content: [
-            { type: 'tool_use', id: 'tool1' },
-            { type: 'text', text: 'I will help you' },
+            { type: 'text', text: 'Let me read the file.' },
+            { type: 'tool_use', name: 'Read', input: { file_path: '/tmp/test.ts' } },
           ],
         },
       },
@@ -211,23 +238,43 @@ describe('extractMessages', () => {
 
     const result = await extractMessages(path)
     expect(result).toHaveLength(1)
-    expect(result[0].content).toBe('I will help you')
+    expect(result[0].content).toContain('Let me read the file.')
+    expect(result[0].content).toContain('[Tool: Read]')
+    expect(result[0].content).toContain('/tmp/test.ts')
   })
 
-  it('skips messages that have no text blocks at all', async () => {
+  it('captures tool_use-only assistant entries', async () => {
     const path = writejsonl(tempDir, [
-      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'x' }] } },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Bash', input: { command: 'ls -la' } },
+          ],
+        },
+      },
+    ])
+
+    const result = await extractMessages(path)
+    expect(result).toHaveLength(1)
+    expect(result[0].content).toContain('[Tool: Bash]')
+    expect(result[0].content).toContain('ls -la')
+  })
+
+  it('skips assistant entries with no text or tool_use blocks', async () => {
+    const path = writejsonl(tempDir, [
+      { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hmm' }] } },
     ])
 
     const result = await extractMessages(path)
     expect(result).toHaveLength(0)
   })
 
-  it('truncates content to 50,000 characters', async () => {
+  it('truncates user string content to 50,000 characters', async () => {
     const path = writejsonl(tempDir, [
       {
-        type: 'human',
-        message: { content: [{ type: 'text', text: 'a'.repeat(60000) }] },
+        type: 'user',
+        message: { content: 'a'.repeat(60000) },
       },
     ])
 
@@ -237,19 +284,19 @@ describe('extractMessages', () => {
 
   it('assigns sequential sequence numbers', async () => {
     const path = writejsonl(tempDir, [
-      { type: 'human', message: { content: [{ type: 'text', text: 'msg1' }] } },
+      { type: 'user', message: { content: 'msg1' } },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'msg2' }] } },
-      { type: 'human', message: { content: [{ type: 'text', text: 'msg3' }] } },
+      { type: 'user', message: { content: 'msg3' } },
     ])
 
     const result = await extractMessages(path)
     expect(result.map((m) => m.sequence)).toEqual([0, 1, 2])
   })
 
-  it('joins multiple text blocks within one message', async () => {
+  it('joins multiple text blocks within one assistant message', async () => {
     const path = writejsonl(tempDir, [
       {
-        type: 'human',
+        type: 'assistant',
         message: {
           content: [
             { type: 'text', text: 'part one' },

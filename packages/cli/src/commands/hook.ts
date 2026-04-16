@@ -172,7 +172,10 @@ export const makeHookCommand: CommandFactory =
 
       // Stop/SubagentStop: extract usage and messages from transcript
       if (event.hook_event_name === 'Stop' || event.hook_event_name === 'SubagentStop') {
-        const transcriptPath = event.transcript_path || event.agent_transcript_path
+        // SubagentStop: use agent transcript (not main session transcript) to avoid duplicates
+        const transcriptPath = event.hook_event_name === 'SubagentStop'
+          ? event.agent_transcript_path
+          : event.transcript_path
         if (transcriptPath) {
           const usage = await deps.transcript.extractUsage(transcriptPath)
           if (usage) {

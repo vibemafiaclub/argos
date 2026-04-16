@@ -1,6 +1,13 @@
 import { readFileSync, existsSync } from 'fs'
 import type { UsagePayload, MessagePayload } from '@argos/shared'
 
+interface ContentBlock {
+  type?: string
+  text?: string
+  name?: string
+  input?: Record<string, unknown>
+}
+
 interface TranscriptLine {
   type?: string
   message?: {
@@ -11,7 +18,7 @@ interface TranscriptLine {
       cache_read_input_tokens?: number
     }
     model?: string
-    content?: Array<{ type?: string; text?: string }>
+    content?: string | ContentBlock[]
   }
   content?: string
   timestamp?: string
@@ -113,8 +120,21 @@ export async function detectSlashCommand(transcriptPath: string): Promise<string
 }
 
 /**
+ * Format a tool_use block as a readable string
+ */
+function formatToolUse(block: ContentBlock): string {
+  const name = block.name || 'unknown'
+  const input = block.input || {}
+  return `[Tool: ${name}] ${JSON.stringify(input)}`
+}
+
+/**
  * Extract all HUMAN/ASSISTANT messages from transcript
- * Returns array of MessagePayload (text blocks only, 50k truncation)
+ * Returns array of MessagePayload (text + tool_use blocks, 50k truncation)
+ *
+ * Claude Code transcript uses type="user" for human messages (also supports legacy "human").
+ * User message content can be a plain string or an array of content blocks.
+ * Array-content user entries (tool_result) are skipped — only actual user text is captured.
  */
 export async function extractMessages(transcriptPath: string): Promise<MessagePayload[]> {
   const lines = await readTranscriptLines(transcriptPath)
@@ -122,27 +142,47 @@ export async function extractMessages(transcriptPath: string): Promise<MessagePa
   let sequence = 0
 
   for (const line of lines) {
-    if (line.type === 'human' || line.type === 'assistant') {
-      const role = line.type === 'human' ? 'HUMAN' : 'ASSISTANT'
-      const content = line.message?.content || []
+    const isUser = line.type === 'user' || line.type === 'human'
+    const isAssistant = line.type === 'assistant'
+    if (!isUser && !isAssistant) continue
 
-      // Extract text blocks only
-      const textBlocks = content
-        .filter((block) => block.type === 'text' && block.text)
-        .map((block) => block.text || '')
+    const role = isUser ? 'HUMAN' : 'ASSISTANT'
+    const content = line.message?.content
 
-      if (textBlocks.length > 0) {
-        const fullText = textBlocks.join('\n')
-        // Truncate to 50,000 characters
-        const truncatedText = fullText.slice(0, 50000)
-
+    // User messages: content can be a plain string
+    if (isUser) {
+      if (typeof content === 'string' && content.length > 0) {
         messages.push({
-          role,
-          content: truncatedText,
+          role: 'HUMAN',
+          content: content.slice(0, 50000),
           sequence: sequence++,
           timestamp: line.timestamp || new Date().toISOString(),
         })
       }
+      // Array content (tool_result blocks) — skip, not actual user input
+      continue
+    }
+
+    // Assistant messages: content is an array of content blocks
+    if (!Array.isArray(content)) continue
+
+    const parts: string[] = []
+    for (const block of content) {
+      if (block.type === 'text' && block.text) {
+        parts.push(block.text)
+      } else if (block.type === 'tool_use' && block.name) {
+        parts.push(formatToolUse(block))
+      }
+    }
+
+    if (parts.length > 0) {
+      const fullText = parts.join('\n')
+      messages.push({
+        role: 'ASSISTANT',
+        content: fullText.slice(0, 50000),
+        sequence: sequence++,
+        timestamp: line.timestamp || new Date().toISOString(),
+      })
     }
   }
 

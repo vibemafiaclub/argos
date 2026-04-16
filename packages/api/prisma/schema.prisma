@@ -227,7 +227,7 @@ model Message {
 
   session ClaudeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
-  @@index([sessionId, sequence])
+  @@unique([sessionId, sequence])
   @@map("messages")
 }
 

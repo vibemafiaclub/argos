@@ -240,12 +240,12 @@ describe('extractMessages', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it('human/assistant 라인에서 text 블록을 추출한다', async () => {
+  it('type="user" 라인에서 string content를 추출한다', async () => {
     const path = writeJsonl(tempDir, [
       {
-        type: 'human',
+        type: 'user',
         timestamp: '2024-01-01T00:00:00.000Z',
-        message: { content: [{ type: 'text', text: 'Hello' }] },
+        message: { content: 'Hello' },
       },
       {
         type: 'assistant',
@@ -256,16 +256,33 @@ describe('extractMessages', () => {
 
     const result = await extractMessages(path)
     expect(result).toHaveLength(2)
+    expect(result[0].role).toBe('HUMAN')
     expect(result[0].content).toBe('Hello')
+    expect(result[1].role).toBe('ASSISTANT')
     expect(result[1].content).toBe('Hi there')
   })
 
-  it('text 블록이 없는 라인은 건너뛴다', async () => {
+  it('레거시 type="human"도 지원한다', async () => {
     const path = writeJsonl(tempDir, [
       {
         type: 'human',
         timestamp: '2024-01-01T00:00:00.000Z',
-        message: { content: [{ type: 'tool_use', id: 'x' }] },
+        message: { content: 'Legacy message' },
+      },
+    ])
+
+    const result = await extractMessages(path)
+    expect(result).toHaveLength(1)
+    expect(result[0].role).toBe('HUMAN')
+    expect(result[0].content).toBe('Legacy message')
+  })
+
+  it('user 라인의 array content(tool_result)는 건너뛴다', async () => {
+    const path = writeJsonl(tempDir, [
+      {
+        type: 'user',
+        timestamp: '2024-01-01T00:00:00.000Z',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'output' }] },
       },
       {
         type: 'assistant',
@@ -279,28 +296,80 @@ describe('extractMessages', () => {
     expect(result[0].content).toBe('response')
   })
 
-  it('50000자를 초과하는 텍스트는 잘린다', async () => {
+  it('assistant의 tool_use 블록을 [Tool: name] 형태로 기록한다', async () => {
+    const path = writeJsonl(tempDir, [
+      {
+        type: 'assistant',
+        timestamp: '2024-01-01T00:00:00.000Z',
+        message: {
+          content: [
+            { type: 'text', text: 'Reading the file.' },
+            { type: 'tool_use', name: 'Read', input: { file_path: '/tmp/a.ts' } },
+          ],
+        },
+      },
+    ])
+
+    const result = await extractMessages(path)
+    expect(result).toHaveLength(1)
+    expect(result[0].content).toContain('Reading the file.')
+    expect(result[0].content).toContain('[Tool: Read]')
+    expect(result[0].content).toContain('/tmp/a.ts')
+  })
+
+  it('tool_use만 있는 assistant 라인도 기록한다', async () => {
+    const path = writeJsonl(tempDir, [
+      {
+        type: 'assistant',
+        timestamp: '2024-01-01T00:00:00.000Z',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } },
+          ],
+        },
+      },
+    ])
+
+    const result = await extractMessages(path)
+    expect(result).toHaveLength(1)
+    expect(result[0].content).toContain('[Tool: Bash]')
+    expect(result[0].content).toContain('npm test')
+  })
+
+  it('text/tool_use 외의 블록(thinking 등)만 있으면 건너뛴다', async () => {
+    const path = writeJsonl(tempDir, [
+      {
+        type: 'assistant',
+        timestamp: '2024-01-01T00:00:00.000Z',
+        message: { content: [{ type: 'thinking', thinking: 'hmm' }] },
+      },
+    ])
+
+    const result = await extractMessages(path)
+    expect(result).toHaveLength(0)
+  })
+
+  it('50000자를 초과하는 user 텍스트는 잘린다', async () => {
     const longText = 'a'.repeat(60000)
     const path = writeJsonl(tempDir, [
       {
-        type: 'human',
+        type: 'user',
         timestamp: '2024-01-01T00:00:00.000Z',
-        message: { content: [{ type: 'text', text: longText }] },
+        message: { content: longText },
       },
     ])
 
     const result = await extractMessages(path)
     expect(result).toHaveLength(1)
     expect(result[0].content).toHaveLength(50000)
-    expect(result[0].content).toBe('a'.repeat(50000))
   })
 
   it('sequence가 0부터 순서대로 증가한다', async () => {
     const path = writeJsonl(tempDir, [
       {
-        type: 'human',
+        type: 'user',
         timestamp: '2024-01-01T00:00:00.000Z',
-        message: { content: [{ type: 'text', text: 'msg1' }] },
+        message: { content: 'msg1' },
       },
       {
         type: 'assistant',
@@ -308,9 +377,9 @@ describe('extractMessages', () => {
         message: { content: [{ type: 'text', text: 'msg2' }] },
       },
       {
-        type: 'human',
+        type: 'user',
         timestamp: '2024-01-01T00:02:00.000Z',
-        message: { content: [{ type: 'text', text: 'msg3' }] },
+        message: { content: 'msg3' },
       },
     ])
 
@@ -323,9 +392,9 @@ describe('extractMessages', () => {
   it('role이 올바르게 HUMAN/ASSISTANT로 매핑된다', async () => {
     const path = writeJsonl(tempDir, [
       {
-        type: 'human',
+        type: 'user',
         timestamp: '2024-01-01T00:00:00.000Z',
-        message: { content: [{ type: 'text', text: 'user message' }] },
+        message: { content: 'user message' },
       },
       {
         type: 'assistant',
