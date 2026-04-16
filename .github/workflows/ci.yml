@@ -16,6 +16,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @argos/api exec prisma generate
       - run: pnpm --filter @argos/shared build
       - run: pnpm --filter @argos/api build
       - run: pnpm --filter argos-ai build
