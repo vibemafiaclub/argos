@@ -28,3 +28,22 @@ export function formatDate(s: string): string {
     return s
   }
 }
+
+/**
+ * Format a timestamp as relative time from a base timestamp.
+ * Examples: "+0m", "+3m", "+1h 5m"
+ */
+export function formatRelativeTime(timestamp: string, baseTimestamp: string): string {
+  const timestampDate = new Date(timestamp)
+  const baseDate = new Date(baseTimestamp)
+  const diffMs = timestampDate.getTime() - baseDate.getTime()
+  const totalMinutes = Math.floor(diffMs / 60000)
+
+  if (totalMinutes < 60) {
+    return `+${totalMinutes}m`
+  }
+
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return `+${hours}h ${minutes}m`
+}

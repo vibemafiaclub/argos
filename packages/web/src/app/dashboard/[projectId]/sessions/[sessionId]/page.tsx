@@ -4,6 +4,7 @@ import { use } from 'react'
 import { useRouter } from 'next/navigation'
 import { StatCard } from '@/components/dashboard/stat-card'
 import { MessageBubble } from '@/components/dashboard/message-bubble'
+import { SessionTimelineChart } from '@/components/dashboard/session-timeline-chart'
 import { useSessionDetail } from '@/hooks/use-dashboard-sessions'
 import { formatTokens, formatCost, formatDate } from '@/lib/format'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -108,6 +109,15 @@ export default function SessionDetailPage({
           value={data.endedAt ? formatDate(data.endedAt) : 'In Progress'}
         />
         <StatCard title="Events" value={data.eventCount} />
+      </div>
+
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-lg font-semibold mb-4">Session Timeline</h2>
+        <SessionTimelineChart
+          usageTimeline={data.usageTimeline}
+          toolEvents={data.toolEvents}
+          sessionStartedAt={data.startedAt}
+        />
       </div>
 
       <div className="bg-white rounded-lg shadow p-6">
