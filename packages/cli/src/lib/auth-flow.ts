@@ -45,12 +45,12 @@ export async function runLoginFlow(apiUrl: string): Promise<LoginResponse> {
 
   // Step 2: Enter 대기
   console.log()
-  process.stdout.write(chalk.dim('Enter를 눌러 브라우저에서 로그인하세요... '))
+  process.stdout.write('Enter를 눌러 브라우저에서 로그인하세요... ')
   await waitForEnter()
 
   // Step 3: 브라우저 열기
   openBrowser(authUrl)
-  console.log(chalk.dim(`브라우저 열기: ${authUrl}`))
+  console.log(`브라우저 열기: ${authUrl}`)
   console.log()
 
   // Step 4: 승인 polling

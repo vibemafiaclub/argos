@@ -38,7 +38,7 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
   console.log()
 
   // Step 1: Login
-  console.log(chalk.dim('→ 로그인'))
+  console.log('→ 로그인')
 
   let loginResponse
   try {
@@ -60,7 +60,7 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
 
   // Step 2: Create project
   console.log()
-  console.log(chalk.dim('→ 프로젝트 생성'))
+  console.log('→ 프로젝트 생성')
 
   const currentDirName = deps.cwd().split('/').pop() || 'my-project'
   const projectName = await deps.prompt.input('프로젝트 이름을 입력하세요:', currentDirName)
@@ -71,7 +71,7 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
   try {
     projectResponse = await deps.api.createProject(projectName, loginResponse.token, apiUrl)
     spinner.succeed(chalk.green(`✓ 프로젝트 생성: ${projectResponse.projectName}`))
-    console.log(chalk.dim(`  조직: ${projectResponse.orgName}`))
+    console.log(`  조직: ${projectResponse.orgName}`)
   } catch (err) {
     spinner.fail(chalk.red('✗ 프로젝트 생성 실패'))
     console.error(err instanceof Error ? err.message : String(err))
@@ -101,11 +101,11 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
   console.log()
   console.log(chalk.bold.green('✓ 설정 완료!'))
   console.log()
-  console.log(chalk.dim('다음 단계:'))
+  console.log('다음 단계:')
   console.log('  git add .argos/project.json .claude/settings.json')
   console.log('  git commit -m "chore: add argos tracking"')
   console.log()
-  console.log(chalk.dim('팀원들이 이 저장소를 clone한 뒤 argos를 실행하면 자동으로 팀에 합류됩니다.'))
+  console.log('팀원들이 이 저장소를 clone한 뒤 argos를 실행하면 자동으로 팀에 합류됩니다.')
 }
 
 /**
@@ -113,7 +113,7 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
  */
 async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUrl: string): Promise<void> {
   console.log(chalk.bold('Argos 로그인'))
-  console.log(chalk.dim(`프로젝트: ${project.projectName}`))
+  console.log(`프로젝트: ${project.projectName}`)
   console.log()
 
   let loginResponse
@@ -156,7 +156,7 @@ async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUr
  */
 async function runProjectInit(deps: ExternalDeps, config: Config, apiUrl: string): Promise<void> {
   console.log(chalk.green(`✓ 로그인됨: ${config.email}`))
-  console.log(chalk.dim('→ 이 디렉토리는 아직 Argos 프로젝트가 아닙니다.'))
+  console.log('→ 이 디렉토리는 아직 Argos 프로젝트가 아닙니다.')
   console.log()
 
   const currentDirName = deps.cwd().split('/').pop() || 'my-project'
@@ -168,7 +168,7 @@ async function runProjectInit(deps: ExternalDeps, config: Config, apiUrl: string
   try {
     projectResponse = await deps.api.createProject(projectName, config.token, config.apiUrl || apiUrl)
     spinner.succeed(chalk.green(`✓ 프로젝트 생성: ${projectResponse.projectName}`))
-    console.log(chalk.dim(`  조직: ${projectResponse.orgName}`))
+    console.log(`  조직: ${projectResponse.orgName}`)
   } catch (err) {
     spinner.fail(chalk.red('✗ 프로젝트 생성 실패'))
     console.error(err instanceof Error ? err.message : String(err))
@@ -220,17 +220,17 @@ async function ensureOrgMembershipAndShowStatus(
   // Show status
   console.log(chalk.bold.green('✓ 모두 준비되어 있습니다.'))
   console.log()
-  console.log(chalk.dim('사용자:  ') + config.email)
-  console.log(chalk.dim('프로젝트:') + ` ${project.projectName} (${project.projectId})`)
-  console.log(chalk.dim('조직:    ') + project.orgName)
-  console.log(chalk.dim('API:     ') + (project.apiUrl || config.apiUrl))
+  console.log('사용자:  ' + config.email)
+  console.log('프로젝트:' + ` ${project.projectName} (${project.projectId})`)
+  console.log('조직:    ' + project.orgName)
+  console.log('API:     ' + (project.apiUrl || config.apiUrl))
 
   // Check hooks
   const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
   const hookResult = deps.hooks.inject(settingsPath)
   if (hookResult === 'injected') {
-    console.log(chalk.dim('Hooks:   ') + chalk.green('✓ .claude/settings.json에 설치됨'))
+    console.log('Hooks:   ' + chalk.green('✓ .claude/settings.json에 설치됨'))
   } else {
-    console.log(chalk.dim('Hooks:   ') + chalk.green('✓ .claude/settings.json에 설치됨'))
+    console.log('Hooks:   ' + chalk.green('✓ .claude/settings.json에 설치됨'))
   }
 }

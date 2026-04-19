@@ -30,5 +30,5 @@ export const makeLogoutCommand: CommandFactory =
 
     console.log()
     console.log('로컬 인증 정보가 삭제되었습니다.')
-    console.log(chalk.dim('다시 로그인하려면 argos를 실행하세요.'))
+    console.log('다시 로그인하려면 argos를 실행하세요.')
   }
