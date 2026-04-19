@@ -13,10 +13,10 @@ function openBrowser(url: string): void {
   exec(`${cmd} "${url}"`)
 }
 
-function waitForEnter(): Promise<void> {
+function waitForEnter(prompt: string): Promise<void> {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout })
-    rl.question('', () => {
+    rl.question(prompt, () => {
       rl.close()
       resolve()
     })
@@ -45,8 +45,7 @@ export async function runLoginFlow(apiUrl: string): Promise<LoginResponse> {
 
   // Step 2: Enter 대기
   console.log()
-  process.stdout.write('Enter를 눌러 브라우저에서 로그인하세요... ')
-  await waitForEnter()
+  await waitForEnter('Enter를 눌러 브라우저에서 로그인하세요... ')
 
   // Step 3: 브라우저 열기
   openBrowser(authUrl)
