@@ -52,6 +52,16 @@ export default function SessionDetailPage({
       : Math.min(selectedIdx, Math.max(0, events.length - 1))
   const selectedEvent = safeIdx !== null ? events[safeIdx] ?? null : null
   const [tab, setTab] = useState<'transcript' | 'files' | 'debug'>('transcript')
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set())
+
+  const toggleGroup = (firstIdx: number) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(firstIdx)) next.delete(firstIdx)
+      else next.add(firstIdx)
+      return next
+    })
+  }
 
   const jumpToEvent = (idx: number) => {
     setSelectedIdx(idx)
@@ -193,6 +203,8 @@ export default function SessionDetailPage({
                 selectedIdx={safeIdx}
                 onSelect={setSelectedIdx}
                 sessionStartedAt={data.startedAt}
+                expandedGroups={expandedGroups}
+                onToggleGroup={toggleGroup}
               />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-[minmax(320px,2fr)_3fr] h-[calc(100vh-360px)] min-h-[500px]">
@@ -202,6 +214,8 @@ export default function SessionDetailPage({
                   selectedIdx={safeIdx ?? -1}
                   onSelect={setSelectedIdx}
                   sessionStartedAt={data.startedAt}
+                  expandedGroups={expandedGroups}
+                  onToggleGroup={toggleGroup}
                 />
               </div>
               <div className="overflow-hidden max-h-[calc(100vh-360px)]">

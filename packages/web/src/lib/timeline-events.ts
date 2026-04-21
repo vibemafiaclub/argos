@@ -141,3 +141,40 @@ export function messagesToTimeline(messages: SessionDetail['messages']): Timelin
 
   return events
 }
+
+export type TimelineGroup =
+  | { kind: 'single'; event: TimelineEvent; idx: number }
+  | {
+      kind: 'toolRun'
+      toolName: string
+      items: { event: ToolEvent; idx: number }[]
+    }
+
+export function buildTimelineGroups(events: TimelineEvent[]): TimelineGroup[] {
+  const groups: TimelineGroup[] = []
+  let run: {
+    toolName: string
+    items: { event: ToolEvent; idx: number }[]
+  } | null = null
+  const flush = () => {
+    if (run) {
+      groups.push({ kind: 'toolRun', toolName: run.toolName, items: run.items })
+      run = null
+    }
+  }
+  events.forEach((event, idx) => {
+    if (event.kind === 'tool' && !event.isSkillCall && !event.isAgentCall) {
+      if (run && run.toolName === event.toolName) {
+        run.items.push({ event, idx })
+      } else {
+        flush()
+        run = { toolName: event.toolName, items: [{ event, idx }] }
+      }
+    } else {
+      flush()
+      groups.push({ kind: 'single', event, idx })
+    }
+  })
+  flush()
+  return groups
+}

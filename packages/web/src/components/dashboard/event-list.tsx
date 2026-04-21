@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
   SLASH_COMMAND_TAG_RE,
+  buildTimelineGroups,
   type TimelineEvent,
-  type ToolEvent,
 } from "@/lib/timeline-events";
 import { cn } from "@/lib/utils";
 
@@ -13,15 +13,9 @@ type EventListProps = {
   selectedIdx: number;
   onSelect: (idx: number) => void;
   sessionStartedAt: string;
+  expandedGroups: Set<number>;
+  onToggleGroup: (firstIdx: number) => void;
 };
-
-type Group =
-  | { kind: "single"; event: TimelineEvent; idx: number }
-  | {
-      kind: "toolRun";
-      toolName: string;
-      items: { event: ToolEvent; idx: number }[];
-    };
 
 type FlatRow =
   | {
@@ -55,41 +49,12 @@ function formatElapsed(timestamp: string, sessionStartedAt: string): string {
   return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function buildGroups(events: TimelineEvent[]): Group[] {
-  const groups: Group[] = [];
-  let run: {
-    toolName: string;
-    items: { event: ToolEvent; idx: number }[];
-  } | null = null;
-  const flush = () => {
-    if (run) {
-      groups.push({ kind: "toolRun", toolName: run.toolName, items: run.items });
-      run = null;
-    }
-  };
-  events.forEach((event, idx) => {
-    if (event.kind === "tool" && !event.isSkillCall && !event.isAgentCall) {
-      if (run && run.toolName === event.toolName) {
-        run.items.push({ event, idx });
-      } else {
-        flush();
-        run = { toolName: event.toolName, items: [{ event, idx }] };
-      }
-    } else {
-      flush();
-      groups.push({ kind: "single", event, idx });
-    }
-  });
-  flush();
-  return groups;
-}
-
 function buildFlatRows(
   events: TimelineEvent[],
   expandedGroups: Set<number>,
   selectedIdx: number,
 ): FlatRow[] {
-  const groups = buildGroups(events);
+  const groups = buildTimelineGroups(events);
   const rows: FlatRow[] = [];
   for (const group of groups) {
     if (group.kind === "single") {
@@ -303,22 +268,13 @@ export function EventList({
   selectedIdx,
   onSelect,
   sessionStartedAt,
+  expandedGroups,
+  onToggleGroup,
 }: EventListProps) {
-  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
-
   const rows = useMemo(
     () => buildFlatRows(events, expandedGroups, selectedIdx),
     [events, expandedGroups, selectedIdx],
   );
-
-  const toggleGroup = (key: number) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
 
   if (events.length === 0) {
     return (
@@ -338,7 +294,7 @@ export function EventList({
         selectedIdx,
         sessionStartedAt,
         onSelect,
-        onToggleGroup: toggleGroup,
+        onToggleGroup,
       }}
       overscanCount={8}
       style={{ height: "100%", width: "100%" }}
