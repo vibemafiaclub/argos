@@ -27,7 +27,7 @@ const sessionInclude = {
 
 type SessionWithInclude = Prisma.ClaudeSessionGetPayload<{ include: typeof sessionInclude }>
 
-// GET /api/projects/:projectId/dashboard/sessions?page=&pageSize=&from=&to=&sort=recent|tokens
+// GET /api/projects/:projectId/dashboard/sessions?page=&pageSize=&from=&to=&sort=recent|cost
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
@@ -50,8 +50,8 @@ export async function GET(
       req.nextUrl.searchParams.get('pageSize'),
     )
 
-    const sortBy: 'tokens' | 'recent' =
-      req.nextUrl.searchParams.get('sort') === 'tokens' ? 'tokens' : 'recent'
+    const sortBy: 'cost' | 'recent' =
+      req.nextUrl.searchParams.get('sort') === 'cost' ? 'cost' : 'recent'
 
     const where = {
       projectId,
@@ -61,8 +61,8 @@ export async function GET(
     let sessions: SessionWithInclude[]
     let total: number
 
-    if (sortBy === 'tokens') {
-      // 1) SUM(input+output) 기준으로 해당 페이지의 session id만 먼저 뽑는다.
+    if (sortBy === 'cost') {
+      // 1) SUM(estimated_cost_usd) 기준으로 해당 페이지의 session id만 먼저 뽑는다.
       //    tie-breaker: started_at desc → id asc 로 페이지 경계를 안정화.
       const [rankedRows, countResult] = await Promise.all([
         db.$queryRaw<Array<{ id: string }>>`
@@ -73,7 +73,7 @@ export async function GET(
             AND cs.started_at >= ${from}
             AND cs.started_at <= ${to}
           GROUP BY cs.id, cs.started_at
-          ORDER BY COALESCE(SUM(ur.input_tokens + ur.output_tokens), 0) DESC,
+          ORDER BY COALESCE(SUM(ur.estimated_cost_usd), 0) DESC,
                    cs.started_at DESC,
                    cs.id ASC
           LIMIT ${take} OFFSET ${skip}

@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react'
 import { apiGet } from '@/lib/api-client'
 import type { PaginatedResult, SessionItem, SessionDetail } from '@argos/shared'
 
-export type SessionSort = 'recent' | 'tokens'
+export type SessionSort = 'recent' | 'cost'
 
 export function useDashboardSessions(
   projectId: string,
@@ -17,7 +17,7 @@ export function useDashboardSessions(
 ) {
   const { data: session } = useSession()
 
-  const sortParam = sort === 'tokens' ? '&sort=tokens' : ''
+  const sortParam = sort === 'cost' ? '&sort=cost' : ''
 
   return useQuery({
     queryKey: ['dashboard', 'sessions', projectId, from, to, page, pageSize, sort],

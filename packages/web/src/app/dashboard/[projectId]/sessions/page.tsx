@@ -16,7 +16,7 @@ const DEFAULT_PAGE_SIZE = 50
 
 const SORT_OPTIONS: { value: SessionSort; label: string }[] = [
   { value: 'recent', label: 'Most recent' },
-  { value: 'tokens', label: 'Most tokens' },
+  { value: 'cost', label: 'Highest cost' },
 ]
 
 function SortPicker({
@@ -58,7 +58,7 @@ function SessionsContent({ projectId }: { projectId: string }) {
   const to = searchParams.get('to') || format(today, 'yyyy-MM-dd')
   const page = Math.max(1, Number(searchParams.get('page')) || 1)
   const pageSize = Number(searchParams.get('pageSize')) || DEFAULT_PAGE_SIZE
-  const sort: SessionSort = searchParams.get('sort') === 'tokens' ? 'tokens' : 'recent'
+  const sort: SessionSort = searchParams.get('sort') === 'cost' ? 'cost' : 'recent'
 
   const { data, isLoading, error, refetch, isPlaceholderData } =
     useDashboardSessions(projectId, from, to, page, pageSize, sort)
