@@ -35,7 +35,7 @@ Everyone who pulls the repo and runs `argos login` is automatically tracked.
 ## Self-hosting
 
 ```bash
-git clone https://github.com/your-org/argos
+git clone https://github.com/vibemafiaclub/argos
 cd argos
 docker-compose up
 ```
