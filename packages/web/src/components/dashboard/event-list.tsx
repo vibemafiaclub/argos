@@ -1,6 +1,10 @@
 import { Fragment, useState } from "react";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
-import type { TimelineEvent, ToolEvent } from "@/lib/timeline-events";
+import {
+  SLASH_COMMAND_TAG_RE,
+  type TimelineEvent,
+  type ToolEvent,
+} from "@/lib/timeline-events";
 
 type EventListProps = {
   events: TimelineEvent[];
@@ -68,7 +72,11 @@ function getSingleLabel(event: TimelineEvent): string {
 
 function getSinglePreview(event: TimelineEvent): string {
   if (event.kind === "message") {
-    const stripped = event.content.replace(/\s+/g, " ").trim();
+    const normalized = event.content.replace(
+      SLASH_COMMAND_TAG_RE,
+      (_, name) => `/${name}`,
+    );
+    const stripped = normalized.replace(/\s+/g, " ").trim();
     return stripped.slice(0, 80);
   }
   if (event.isSkillCall && event.skillName) return `Skill: ${event.skillName}`;

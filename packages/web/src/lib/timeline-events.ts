@@ -40,38 +40,97 @@ function getAgentType(toolName: string, input: Record<string, unknown> | null): 
   return typeof t === 'string' ? t : null
 }
 
+export const SLASH_COMMAND_TAG_RE =
+  /<command-message>[^<]*<\/command-message>\s*<command-name>\/([^<\s]+)<\/command-name>/g
+
+export function extractSlashCommands(content: string): {
+  stripped: string
+  names: string[]
+} {
+  const names: string[] = []
+  const stripped = content
+    .replace(SLASH_COMMAND_TAG_RE, (_, name) => {
+      names.push(name)
+      return ''
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return { stripped, names }
+}
+
 export function messagesToTimeline(messages: SessionDetail['messages']): TimelineEvent[] {
-  const events: TimelineEvent[] = messages.map((m) => {
+  const events: TimelineEvent[] = messages.flatMap((m) => {
     if (m.role === 'TOOL') {
       const toolName = m.toolName ?? 'unknown'
       const toolInput = (m.toolInput ?? null) as Record<string, unknown> | null
       const skillName = getSkillName(toolName, toolInput)
       const agentType = getAgentType(toolName, toolInput)
-      return {
-        kind: 'tool',
-        toolName,
-        toolInput,
-        content: m.content,
-        durationMs: m.durationMs ?? null,
-        timestamp: m.timestamp,
-        sequence: m.sequence,
-        isSkillCall: toolName === 'Skill',
-        skillName,
-        isAgentCall: toolName === 'Agent',
-        agentType,
+      return [
+        {
+          kind: 'tool',
+          toolName,
+          toolInput,
+          content: m.content,
+          durationMs: m.durationMs ?? null,
+          timestamp: m.timestamp,
+          sequence: m.sequence,
+          isSkillCall: toolName === 'Skill',
+          skillName,
+          isAgentCall: toolName === 'Agent',
+          agentType,
+        },
+      ]
+    }
+
+    if (m.role === 'HUMAN') {
+      const { stripped, names } = extractSlashCommands(m.content)
+      if (names.length > 0) {
+        const out: TimelineEvent[] = []
+        if (stripped.length > 0) {
+          out.push({
+            kind: 'message',
+            role: m.role,
+            content: m.content,
+            timestamp: m.timestamp,
+            sequence: m.sequence,
+            outputTokens: m.outputTokens ?? 0,
+            inputTokens: m.inputTokens ?? 0,
+            estimatedCostUsd: m.estimatedCostUsd ?? 0,
+            model: m.model ?? null,
+          })
+        }
+        names.forEach((name, i) => {
+          out.push({
+            kind: 'tool',
+            toolName: 'Skill',
+            toolInput: { skill: name },
+            content: '',
+            durationMs: null,
+            timestamp: m.timestamp,
+            sequence: m.sequence + (i + 1) * 0.001,
+            isSkillCall: true,
+            skillName: name,
+            isAgentCall: false,
+            agentType: null,
+          })
+        })
+        return out
       }
     }
-    return {
-      kind: 'message',
-      role: m.role,
-      content: m.content,
-      timestamp: m.timestamp,
-      sequence: m.sequence,
-      outputTokens: m.outputTokens ?? 0,
-      inputTokens: m.inputTokens ?? 0,
-      estimatedCostUsd: m.estimatedCostUsd ?? 0,
-      model: m.model ?? null,
-    }
+
+    return [
+      {
+        kind: 'message',
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        sequence: m.sequence,
+        outputTokens: m.outputTokens ?? 0,
+        inputTokens: m.inputTokens ?? 0,
+        estimatedCostUsd: m.estimatedCostUsd ?? 0,
+        model: m.model ?? null,
+      },
+    ]
   })
 
   events.sort((a, b) => {

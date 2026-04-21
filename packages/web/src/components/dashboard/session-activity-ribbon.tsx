@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, type CSSProperties } from 'react'
-import type { TimelineEvent } from '@/lib/timeline-events'
+import { SLASH_COMMAND_TAG_RE, type TimelineEvent } from '@/lib/timeline-events'
 import { formatTokens, formatCost, formatRelativeTime } from '@/lib/format'
 
 type Props = {
@@ -35,7 +35,11 @@ function TooltipBody({
   const elapsed = formatRelativeTime(event.timestamp, sessionStartedAt)
 
   if (event.kind === 'message' && event.role === 'HUMAN') {
-    const preview = event.content.replace(/\s+/g, ' ').trim().slice(0, 120)
+    const preview = event.content
+      .replace(SLASH_COMMAND_TAG_RE, (_, name) => `/${name}`)
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120)
     return (
       <>
         <p className="font-medium text-gray-900">User</p>
