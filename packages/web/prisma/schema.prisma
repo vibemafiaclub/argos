@@ -111,9 +111,48 @@ model Project {
   sessions     ClaudeSession[]
   events       Event[]
   usageRecords UsageRecord[]
+  dailyStats   DailyProjectStat[]
 
   @@unique([orgId, slug])
   @@map("projects")
+}
+
+// ─── DailyProjectStat ──────────────────────────────────────────────────────
+// 하루 단위로 pre-aggregated된 dashboard 지표.
+// past 날짜에 대해 lazy하게 계산/upsert하고, 이후 조회는 이 테이블에서만 읽는다.
+// "오늘"은 아직 데이터가 움직이므로 캐시하지 않고 매 요청마다 live 집계한다.
+
+model DailyProjectStat {
+  projectId           String   @map("project_id")
+  date                DateTime @db.Date   // UTC-local day
+
+  sessionCount        Int      @default(0) @map("session_count")
+  turnCount           Int      @default(0) @map("turn_count")
+  activeUserCount     Int      @default(0) @map("active_user_count")
+
+  inputTokens         BigInt   @default(0) @map("input_tokens")
+  outputTokens        BigInt   @default(0) @map("output_tokens")
+  cacheReadTokens     BigInt   @default(0) @map("cache_read_tokens")
+  cacheCreationTokens BigInt   @default(0) @map("cache_creation_tokens")
+  estimatedCostUsd    Float    @default(0) @map("estimated_cost_usd")
+
+  // activeUserIds: 범위 쿼리에서 DISTINCT 병합용 (set union 후 size)
+  activeUserIds       Json     @default("[]") @map("active_user_ids")
+  // { skillName: count, ... }
+  skillCounts         Json     @default("{}") @map("skill_counts")
+  // { agentType: count, ... }
+  agentCounts         Json     @default("{}") @map("agent_counts")
+  // { model: totalTokens, ... }
+  modelTokens         Json     @default("{}") @map("model_tokens")
+  // [{ userId, name, sessionCount, inputTokens, outputTokens, cost, skillCalls, agentCalls }, ...]
+  userStats           Json     @default("[]") @map("user_stats")
+
+  computedAt          DateTime @default(now()) @map("computed_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, date])
+  @@map("daily_project_stats")
 }
 
 // ─── ClaudeSession ─────────────────────────────────────────────────────────

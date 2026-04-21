@@ -5,11 +5,12 @@ import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
 import { parseDateRange, parsePagination } from '@/lib/server/dashboard'
 import { assertProjectAccessOrResponse } from '@/lib/server/dashboard-route-helper'
+import { getDailyRollups, aggregateUserStats } from '@/lib/server/daily-rollup'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// GET /api/projects/:projectId/dashboard/users?page=&pageSize=&from=&to=
+// GET /api/projects/:projectId/dashboard/users?page=&pageSize=&from=&to=&sort=tokens|name
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
@@ -33,97 +34,48 @@ export async function GET(
       req.nextUrl.searchParams.get('pageSize'),
     )
 
-    const sortParam = req.nextUrl.searchParams.get('sort')
-    const sortByTokens = sortParam === 'tokens'
+    const sortByTokens = req.nextUrl.searchParams.get('sort') === 'tokens'
 
-    const [users, totalRow] = await Promise.all([
-      sortByTokens
-        ? db.$queryRaw<Array<{
-            id: string
-            name: string
-            avatar_url: string | null
-            session_count: bigint
-            input_tokens: bigint | null
-            output_tokens: bigint | null
-            cost_usd: number | null
-            skill_calls: bigint
-            agent_calls: bigint
-          }>>`
-            SELECT
-              u.id,
-              u.name,
-              u.avatar_url,
-              COUNT(DISTINCT s.id) AS session_count,
-              SUM(ur.input_tokens) AS input_tokens,
-              SUM(ur.output_tokens) AS output_tokens,
-              SUM(ur.estimated_cost_usd) AS cost_usd,
-              COUNT(CASE WHEN e.is_skill_call THEN 1 END) AS skill_calls,
-              COUNT(CASE WHEN e.is_agent_call THEN 1 END) AS agent_calls
-            FROM users u
-            JOIN org_memberships om ON om.user_id = u.id AND om.org_id = ${orgId}
-            LEFT JOIN usage_records ur ON ur.user_id = u.id AND ur.project_id = ${projectId}
-              AND ur.timestamp BETWEEN ${from} AND ${to}
-            LEFT JOIN claude_sessions s ON s.user_id = u.id AND s.project_id = ${projectId}
-              AND s.started_at BETWEEN ${from} AND ${to}
-            LEFT JOIN events e ON e.user_id = u.id AND e.project_id = ${projectId}
-              AND e.timestamp BETWEEN ${from} AND ${to}
-            GROUP BY u.id, u.name, u.avatar_url
-            ORDER BY COALESCE(SUM(ur.input_tokens), 0) + COALESCE(SUM(ur.output_tokens), 0) DESC NULLS LAST, u.name ASC
-            LIMIT ${take} OFFSET ${skip}
-          `
-        : db.$queryRaw<Array<{
-            id: string
-            name: string
-            avatar_url: string | null
-            session_count: bigint
-            input_tokens: bigint | null
-            output_tokens: bigint | null
-            cost_usd: number | null
-            skill_calls: bigint
-            agent_calls: bigint
-          }>>`
-            SELECT
-              u.id,
-              u.name,
-              u.avatar_url,
-              COUNT(DISTINCT s.id) AS session_count,
-              SUM(ur.input_tokens) AS input_tokens,
-              SUM(ur.output_tokens) AS output_tokens,
-              SUM(ur.estimated_cost_usd) AS cost_usd,
-              COUNT(CASE WHEN e.is_skill_call THEN 1 END) AS skill_calls,
-              COUNT(CASE WHEN e.is_agent_call THEN 1 END) AS agent_calls
-            FROM users u
-            JOIN org_memberships om ON om.user_id = u.id AND om.org_id = ${orgId}
-            LEFT JOIN usage_records ur ON ur.user_id = u.id AND ur.project_id = ${projectId}
-              AND ur.timestamp BETWEEN ${from} AND ${to}
-            LEFT JOIN claude_sessions s ON s.user_id = u.id AND s.project_id = ${projectId}
-              AND s.started_at BETWEEN ${from} AND ${to}
-            LEFT JOIN events e ON e.user_id = u.id AND e.project_id = ${projectId}
-              AND e.timestamp BETWEEN ${from} AND ${to}
-            GROUP BY u.id, u.name, u.avatar_url
-            ORDER BY u.name ASC
-            LIMIT ${take} OFFSET ${skip}
-          `,
-      db.$queryRaw<Array<{ count: bigint }>>`
-        SELECT COUNT(*)::bigint AS count
-        FROM users u
-        JOIN org_memberships om ON om.user_id = u.id AND om.org_id = ${orgId}
-      `,
+    const [members, rollups] = await Promise.all([
+      db.user.findMany({
+        where: { memberships: { some: { orgId } } },
+        select: { id: true, name: true, avatarUrl: true },
+      }),
+      getDailyRollups(projectId, from, to),
     ])
 
-    const items: UserStat[] = users.map(u => ({
-      userId: u.id,
-      name: u.name,
-      avatarUrl: u.avatar_url,
-      sessionCount: Number(u.session_count),
-      inputTokens: Number(u.input_tokens ?? 0),
-      outputTokens: Number(u.output_tokens ?? 0),
-      estimatedCostUsd: Number(u.cost_usd ?? 0),
-      skillCalls: Number(u.skill_calls),
-      agentCalls: Number(u.agent_calls)
-    }))
+    const aggregated = aggregateUserStats(rollups)
+    const byId = new Map(aggregated.map(a => [a.userId, a]))
 
-    const total = Number(totalRow[0]?.count ?? 0)
+    const allRows: UserStat[] = members.map(m => {
+      const a = byId.get(m.id)
+      return {
+        userId: m.id,
+        name: m.name,
+        avatarUrl: m.avatarUrl,
+        sessionCount: a?.sessionCount ?? 0,
+        inputTokens: a?.inputTokens ?? 0,
+        outputTokens: a?.outputTokens ?? 0,
+        estimatedCostUsd: a?.estimatedCostUsd ?? 0,
+        skillCalls: a?.skillCalls ?? 0,
+        agentCalls: a?.agentCalls ?? 0,
+      }
+    })
+
+    if (sortByTokens) {
+      allRows.sort((a, b) => {
+        const at = a.inputTokens + a.outputTokens
+        const bt = b.inputTokens + b.outputTokens
+        if (bt !== at) return bt - at
+        return a.name.localeCompare(b.name)
+      })
+    } else {
+      allRows.sort((a, b) => a.name.localeCompare(b.name))
+    }
+
+    const total = allRows.length
+    const items = allRows.slice(skip, skip + take)
+
     const body: PaginatedResult<UserStat> = { items, total, page, pageSize }
     return NextResponse.json(body)
   } catch (err) {

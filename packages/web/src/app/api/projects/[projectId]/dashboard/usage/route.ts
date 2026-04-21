@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { UsageSeries } from '@argos/shared'
-import { db } from '@/lib/server/db'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
 import { parseDateRange } from '@/lib/server/dashboard'
 import { assertProjectAccessOrResponse } from '@/lib/server/dashboard-route-helper'
+import { getDailyRollups, aggregateUsageSeries } from '@/lib/server/daily-rollup'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -27,39 +27,12 @@ export async function GET(
     const toQuery = req.nextUrl.searchParams.get('to') ?? undefined
     const { from, to } = parseDateRange(fromQuery, toQuery)
 
-    const series = await db.$queryRaw<Array<{
-      date: Date
-      inputTokens: number
-      outputTokens: number
-      cacheReadTokens: number
-      cacheCreationTokens: number
-      estimatedCostUsd: number
-    }>>`
-      SELECT
-        DATE_TRUNC('day', timestamp)::date AS date,
-        SUM(input_tokens)::int             AS "inputTokens",
-        SUM(output_tokens)::int            AS "outputTokens",
-        SUM(cache_read_tokens)::int        AS "cacheReadTokens",
-        SUM(cache_creation_tokens)::int    AS "cacheCreationTokens",
-        COALESCE(SUM(estimated_cost_usd), 0) AS "estimatedCostUsd"
-      FROM usage_records
-      WHERE project_id = ${projectId}
-        AND timestamp >= ${from}
-        AND timestamp <= ${to}
-      GROUP BY 1
-      ORDER BY 1
-    `
+    const rollups = await getDailyRollups(projectId, from, to)
+    const series: UsageSeries[] = aggregateUsageSeries(rollups)
 
-    const usageSeries: UsageSeries[] = series.map(s => ({
-      date: s.date.toISOString().split('T')[0],
-      inputTokens: s.inputTokens,
-      outputTokens: s.outputTokens,
-      cacheReadTokens: s.cacheReadTokens,
-      cacheCreationTokens: s.cacheCreationTokens,
-      estimatedCostUsd: Number(s.estimatedCostUsd)
-    }))
-
-    return NextResponse.json({ series: usageSeries })
+    // 비어있는 rollup(토큰 0)은 프런트에서 빈 bar로 표시할 필요가 있으면 유지,
+    // 없애고 싶으면 여기서 filter하면 됨. 기본값은 모두 포함.
+    return NextResponse.json({ series })
   } catch (err) {
     return handleRouteError(err)
   }
