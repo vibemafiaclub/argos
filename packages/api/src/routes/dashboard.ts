@@ -448,6 +448,26 @@ dashboard.get('/sessions/:sessionId', async (c) => {
     isSubagent: r.isSubagent,
   }))
 
+  // 각 UsageRecord를 "직전 ASSISTANT 턴"에 귀속시켜 메시지별 outputTokens 합산.
+  // TOOL 메시지는 건너뛰고 가장 가까운 선행 ASSISTANT로 타고 올라감.
+  const messageOutputTokens = new Array(session.messages.length).fill(0) as number[]
+  {
+    let msgIdx = -1
+    for (const u of session.usageRecords) {
+      while (
+        msgIdx + 1 < session.messages.length &&
+        session.messages[msgIdx + 1].timestamp.getTime() <= u.timestamp.getTime()
+      ) {
+        msgIdx++
+      }
+      let ownerIdx = msgIdx
+      while (ownerIdx >= 0 && session.messages[ownerIdx].role === 'TOOL') ownerIdx--
+      if (ownerIdx >= 0 && session.messages[ownerIdx].role === 'ASSISTANT') {
+        messageOutputTokens[ownerIdx] += u.outputTokens
+      }
+    }
+  }
+
   const detail: SessionDetail = {
     id: session.id,
     userId: session.user.id,
@@ -458,11 +478,12 @@ dashboard.get('/sessions/:sessionId', async (c) => {
     outputTokens: totalOutput,
     estimatedCostUsd: totalCost,
     eventCount: session._count.events,
-    messages: session.messages.map(m => ({
+    messages: session.messages.map((m, i) => ({
       role: m.role,
       content: m.content,
       sequence: m.sequence,
       timestamp: m.timestamp.toISOString(),
+      outputTokens: messageOutputTokens[i],
       toolName: m.toolName,
       toolInput: m.toolInput as Record<string, unknown> | null,
       toolUseId: m.toolUseId,

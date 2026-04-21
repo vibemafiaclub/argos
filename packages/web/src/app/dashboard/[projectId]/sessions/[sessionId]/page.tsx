@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { EventList } from '@/components/dashboard/event-list'
 import { EventDetail } from '@/components/dashboard/event-detail'
 import { SessionTimelineChart } from '@/components/dashboard/session-timeline-chart'
+import { SessionActivityRibbon } from '@/components/dashboard/session-activity-ribbon'
 import { useSessionDetail } from '@/hooks/use-dashboard-sessions'
 import { messagesToTimeline } from '@/lib/timeline-events'
 import {
@@ -146,15 +147,6 @@ export default function SessionDetailPage({
         <span>Started {formatDate(data.startedAt)}</span>
       </div>
 
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-lg font-semibold mb-4">Session Timeline</h2>
-        <SessionTimelineChart
-          usageTimeline={data.usageTimeline}
-          messages={data.messages}
-          sessionStartedAt={data.startedAt}
-        />
-      </div>
-
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <Tabs value={tab} onChange={(v) => setTab(v as 'transcript' | 'debug')}>
           <TabsList className="px-4">
@@ -162,6 +154,13 @@ export default function SessionDetailPage({
             <TabsTrigger value="debug">Debug</TabsTrigger>
           </TabsList>
           <TabsContent value="transcript">
+            <div className="px-4 pt-3 pb-2">
+              <SessionActivityRibbon
+                events={events}
+                selectedIdx={safeIdx}
+                onSelect={setSelectedIdx}
+              />
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-[minmax(320px,2fr)_3fr] min-h-[500px]">
               <div className="border-r border-gray-200 overflow-y-auto max-h-[calc(100vh-360px)]">
                 <EventList
@@ -180,7 +179,15 @@ export default function SessionDetailPage({
             </div>
           </TabsContent>
           <TabsContent value="debug">
-            <div className="max-h-[calc(100vh-360px)] overflow-auto p-4">
+            <div className="max-h-[calc(100vh-360px)] overflow-auto p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-semibold mb-2">Session Timeline</h3>
+                <SessionTimelineChart
+                  usageTimeline={data.usageTimeline}
+                  messages={data.messages}
+                  sessionStartedAt={data.startedAt}
+                />
+              </div>
               <pre className="text-xs bg-gray-50 rounded p-4 overflow-auto whitespace-pre">
                 {JSON.stringify(data, null, 2)}
               </pre>
