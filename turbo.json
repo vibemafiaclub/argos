@@ -3,7 +3,16 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
+      "env": [
+        "AUTH_SECRET",
+        "AUTH_GITHUB_ID",
+        "AUTH_GITHUB_SECRET",
+        "DATABASE_URL",
+        "DIRECT_URL",
+        "JWT_SECRET",
+        "NODE_ENV"
+      ]
     },
     "dev": {
       "cache": false,
