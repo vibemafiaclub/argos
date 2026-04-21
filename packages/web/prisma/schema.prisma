@@ -252,6 +252,7 @@ model UsageRecord {
 
   @@index([projectId, timestamp])
   @@index([userId, timestamp])
+  @@index([sessionId])
   @@map("usage_records")
 }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { PaginatedResult, SessionItem } from '@argos/shared'
+import { Prisma } from '@prisma/client'
 import { db } from '@/lib/server/db'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
@@ -9,7 +10,24 @@ import { assertProjectAccessOrResponse } from '@/lib/server/dashboard-route-help
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// GET /api/projects/:projectId/dashboard/sessions?page=&pageSize=&from=&to=
+const sessionInclude = {
+  user: { select: { id: true, name: true } },
+  usageRecords: {
+    select: { inputTokens: true, outputTokens: true, estimatedCostUsd: true },
+  },
+  // Title fallback — 저장된 title이 없는 세션용으로 첫 HUMAN 메시지 1건만 로딩
+  messages: {
+    where: { role: 'HUMAN' as const },
+    orderBy: [{ timestamp: 'asc' as const }, { sequence: 'asc' as const }],
+    take: 1,
+    select: { content: true },
+  },
+  _count: { select: { events: true } },
+} satisfies Prisma.ClaudeSessionInclude
+
+type SessionWithInclude = Prisma.ClaudeSessionGetPayload<{ include: typeof sessionInclude }>
+
+// GET /api/projects/:projectId/dashboard/sessions?page=&pageSize=&from=&to=&sort=recent|tokens
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
@@ -32,34 +50,66 @@ export async function GET(
       req.nextUrl.searchParams.get('pageSize'),
     )
 
+    const sortBy: 'tokens' | 'recent' =
+      req.nextUrl.searchParams.get('sort') === 'tokens' ? 'tokens' : 'recent'
+
     const where = {
       projectId,
       startedAt: { gte: from, lte: to },
     }
 
-    const [sessions, total] = await Promise.all([
-      db.claudeSession.findMany({
-        where,
-        include: {
-          user: { select: { id: true, name: true } },
-          usageRecords: {
-            select: { inputTokens: true, outputTokens: true, estimatedCostUsd: true }
-          },
-          // Title fallback — 저장된 title이 없는 세션용으로 첫 HUMAN 메시지 1건만 로딩
-          messages: {
-            where: { role: 'HUMAN' },
-            orderBy: [{ timestamp: 'asc' }, { sequence: 'asc' }],
-            take: 1,
-            select: { content: true }
-          },
-          _count: { select: { events: true } }
-        },
-        orderBy: { startedAt: 'desc' },
-        skip,
-        take,
-      }),
-      db.claudeSession.count({ where }),
-    ])
+    let sessions: SessionWithInclude[]
+    let total: number
+
+    if (sortBy === 'tokens') {
+      // 1) SUM(input+output) 기준으로 해당 페이지의 session id만 먼저 뽑는다.
+      //    tie-breaker: started_at desc → id asc 로 페이지 경계를 안정화.
+      const [rankedRows, countResult] = await Promise.all([
+        db.$queryRaw<Array<{ id: string }>>`
+          SELECT cs.id
+          FROM claude_sessions cs
+          LEFT JOIN usage_records ur ON ur.session_id = cs.id
+          WHERE cs.project_id = ${projectId}
+            AND cs.started_at >= ${from}
+            AND cs.started_at <= ${to}
+          GROUP BY cs.id, cs.started_at
+          ORDER BY COALESCE(SUM(ur.input_tokens + ur.output_tokens), 0) DESC,
+                   cs.started_at DESC,
+                   cs.id ASC
+          LIMIT ${take} OFFSET ${skip}
+        `,
+        db.claudeSession.count({ where }),
+      ])
+      total = countResult
+
+      const ids = rankedRows.map(r => r.id)
+      if (ids.length === 0) {
+        sessions = []
+      } else {
+        // 2) 해당 id들만 기존 include 구조로 하이드레이션 후 rank 순서 복원.
+        const rows = await db.claudeSession.findMany({
+          where: { id: { in: ids } },
+          include: sessionInclude,
+        })
+        const byId = new Map(rows.map(s => [s.id, s]))
+        sessions = ids
+          .map(id => byId.get(id))
+          .filter((s): s is SessionWithInclude => !!s)
+      }
+    } else {
+      const [rows, countResult] = await Promise.all([
+        db.claudeSession.findMany({
+          where,
+          include: sessionInclude,
+          orderBy: { startedAt: 'desc' },
+          skip,
+          take,
+        }),
+        db.claudeSession.count({ where }),
+      ])
+      sessions = rows
+      total = countResult
+    }
 
     const items: SessionItem[] = sessions.map(s => {
       const totalInput = s.usageRecords.reduce((sum, r) => sum + r.inputTokens, 0)

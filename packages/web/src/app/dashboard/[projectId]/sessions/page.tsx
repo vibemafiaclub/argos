@@ -4,7 +4,7 @@ import { use, Suspense } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { subDays, format } from 'date-fns'
 import { DateRangePicker } from '@/components/dashboard/date-range-picker'
-import { useDashboardSessions } from '@/hooks/use-dashboard-sessions'
+import { useDashboardSessions, type SessionSort } from '@/hooks/use-dashboard-sessions'
 import { formatTokens, formatCost, formatDateTimeFull } from '@/lib/format'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -13,6 +13,39 @@ import { Pagination } from '@/components/ui/pagination'
 import { cn } from '@/lib/utils'
 
 const DEFAULT_PAGE_SIZE = 50
+
+const SORT_OPTIONS: { value: SessionSort; label: string }[] = [
+  { value: 'recent', label: 'Most recent' },
+  { value: 'tokens', label: 'Most tokens' },
+]
+
+function SortPicker({
+  value,
+  onChange,
+}: {
+  value: SessionSort
+  onChange: (next: SessionSort) => void
+}) {
+  return (
+    <div className="inline-flex rounded-lg bg-card ring-1 ring-border p-0.5">
+      {SORT_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className={cn(
+            'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+            value === opt.value
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 function SessionsContent({ projectId }: { projectId: string }) {
   const router = useRouter()
@@ -25,9 +58,10 @@ function SessionsContent({ projectId }: { projectId: string }) {
   const to = searchParams.get('to') || format(today, 'yyyy-MM-dd')
   const page = Math.max(1, Number(searchParams.get('page')) || 1)
   const pageSize = Number(searchParams.get('pageSize')) || DEFAULT_PAGE_SIZE
+  const sort: SessionSort = searchParams.get('sort') === 'tokens' ? 'tokens' : 'recent'
 
   const { data, isLoading, error, refetch, isPlaceholderData } =
-    useDashboardSessions(projectId, from, to, page, pageSize)
+    useDashboardSessions(projectId, from, to, page, pageSize, sort)
 
   const setQuery = (updates: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -84,7 +118,18 @@ function SessionsContent({ projectId }: { projectId: string }) {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
           <h1 className="text-2xl font-semibold">Sessions</h1>
-          <DateRangePicker />
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <SortPicker
+              value={sort}
+              onChange={(next) =>
+                setQuery({
+                  sort: next === 'recent' ? null : next,
+                  page: null,
+                })
+              }
+            />
+            <DateRangePicker />
+          </div>
         </div>
 
         <div className="bg-card rounded-xl ring-1 ring-foreground/10 p-12 text-center">
@@ -105,7 +150,18 @@ function SessionsContent({ projectId }: { projectId: string }) {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <h1 className="text-2xl font-semibold">Sessions</h1>
-        <DateRangePicker />
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+          <SortPicker
+            value={sort}
+            onChange={(next) =>
+              setQuery({
+                sort: next === 'recent' ? null : next,
+                page: null,
+              })
+            }
+          />
+          <DateRangePicker />
+        </div>
       </div>
 
       <div className="bg-card rounded-xl ring-1 ring-foreground/10 overflow-hidden">

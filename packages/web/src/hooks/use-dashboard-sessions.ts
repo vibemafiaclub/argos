@@ -5,20 +5,25 @@ import { useSession } from 'next-auth/react'
 import { apiGet } from '@/lib/api-client'
 import type { PaginatedResult, SessionItem, SessionDetail } from '@argos/shared'
 
+export type SessionSort = 'recent' | 'tokens'
+
 export function useDashboardSessions(
   projectId: string,
   from: string,
   to: string,
   page: number,
   pageSize: number,
+  sort: SessionSort = 'recent',
 ) {
   const { data: session } = useSession()
 
+  const sortParam = sort === 'tokens' ? '&sort=tokens' : ''
+
   return useQuery({
-    queryKey: ['dashboard', 'sessions', projectId, from, to, page, pageSize],
+    queryKey: ['dashboard', 'sessions', projectId, from, to, page, pageSize, sort],
     queryFn: () =>
       apiGet<PaginatedResult<SessionItem>>(
-        `/api/projects/${projectId}/dashboard/sessions?from=${from}&to=${to}&page=${page}&pageSize=${pageSize}`,
+        `/api/projects/${projectId}/dashboard/sessions?from=${from}&to=${to}&page=${page}&pageSize=${pageSize}${sortParam}`,
         session?.argosToken ?? ''
       ),
     staleTime: 30_000,
