@@ -1,15 +1,28 @@
 'use client'
 
-import { use } from 'react'
+import { use, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { StatCard } from '@/components/dashboard/stat-card'
-import { MessageBubble } from '@/components/dashboard/message-bubble'
+import { EventList } from '@/components/dashboard/event-list'
+import { EventDetail } from '@/components/dashboard/event-detail'
 import { SessionTimelineChart } from '@/components/dashboard/session-timeline-chart'
 import { useSessionDetail } from '@/hooks/use-dashboard-sessions'
-import { formatTokens, formatCost, formatDate } from '@/lib/format'
+import { mergeTimelineEvents } from '@/lib/timeline-events'
+import {
+  formatTokens,
+  formatCost,
+  formatDate,
+  formatDuration,
+  formatRelativeTime,
+} from '@/lib/format'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from '@/components/ui/tabs'
 
 export default function SessionDetailPage({
   params,
@@ -21,22 +34,24 @@ export default function SessionDetailPage({
 
   const { data, isLoading, error, refetch } = useSessionDetail(projectId, sessionId)
 
+  const events = useMemo(
+    () => (data ? mergeTimelineEvents(data.messages, data.toolEvents) : []),
+    [data],
+  )
+  const [selectedIdx, setSelectedIdx] = useState(0)
+  const safeIdx = Math.min(selectedIdx, Math.max(0, events.length - 1))
+  const [tab, setTab] = useState<'transcript' | 'debug'>('transcript')
+
   if (isLoading) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-8 w-48" />
-          <Skeleton className="h-8 w-32" />
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-72" />
+          <Skeleton className="h-4 w-96" />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-24" />
-          ))}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[...Array(3)].map((_, i) => (
-            <Skeleton key={i} className="h-24" />
-          ))}
+        <div className="bg-white rounded-lg shadow p-6">
+          <Skeleton className="h-6 w-32 mb-4" />
+          <Skeleton className="h-48 w-full" />
         </div>
         <div className="bg-white rounded-lg shadow p-6">
           <Skeleton className="h-6 w-32 mb-4" />
@@ -53,7 +68,9 @@ export default function SessionDetailPage({
   if (error) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Session Detail</h1>
+        <Button variant="outline" onClick={() => router.back()}>
+          ← Back to Sessions
+        </Button>
         <Alert variant="destructive">
           <AlertDescription className="flex items-center justify-between">
             <span>데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.</span>
@@ -62,9 +79,6 @@ export default function SessionDetailPage({
             </Button>
           </AlertDescription>
         </Alert>
-        <Button variant="outline" onClick={() => router.back()}>
-          ← Back to Sessions
-        </Button>
       </div>
     )
   }
@@ -72,43 +86,60 @@ export default function SessionDetailPage({
   if (!data) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Session Not Found</h1>
         <Button variant="outline" onClick={() => router.back()}>
           ← Back to Sessions
         </Button>
+        <p className="text-sm text-gray-500">Session not found.</p>
       </div>
     )
   }
 
+  const truncatedId =
+    data.id.length > 12 ? `${data.id.slice(0, 12)}…` : data.id
+  const duration = formatDuration(data.startedAt, data.endedAt)
+  const relative = formatRelativeTime(data.startedAt)
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-2xl font-bold">Session Detail</h1>
-        <Button variant="outline" onClick={() => router.back()}>
-          ← Back to Sessions
-        </Button>
-      </div>
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.back()}
+            className="px-2"
+          >
+            ←
+          </Button>
+          <h1 className="text-lg font-semibold">Session {truncatedId}</h1>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+          <span>{duration}</span>
+          {!data.endedAt && (
+            <>
+              <span>·</span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-green-700">
+                Live
+              </span>
+            </>
+          )}
+          <span>·</span>
+          <span>{relative}</span>
+          <span>·</span>
+          <span>{data.eventCount} events</span>
+        </div>
+      </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="User" value={data.userName} />
-        <StatCard
-          title="Input Tokens"
-          value={formatTokens(data.inputTokens)}
-        />
-        <StatCard
-          title="Output Tokens"
-          value={formatTokens(data.outputTokens)}
-        />
-        <StatCard title="Cost" value={formatCost(data.estimatedCostUsd)} />
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard title="Started" value={formatDate(data.startedAt)} />
-        <StatCard
-          title="Ended"
-          value={data.endedAt ? formatDate(data.endedAt) : 'In Progress'}
-        />
-        <StatCard title="Events" value={data.eventCount} />
+      <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-500">
+        <span>{data.userName}</span>
+        <span>·</span>
+        <span>In {formatTokens(data.inputTokens)}</span>
+        <span>·</span>
+        <span>Out {formatTokens(data.outputTokens)}</span>
+        <span>·</span>
+        <span>{formatCost(data.estimatedCostUsd)}</span>
+        <span>·</span>
+        <span>Started {formatDate(data.startedAt)}</span>
       </div>
 
       <div className="bg-white rounded-lg shadow p-6">
@@ -120,23 +151,34 @@ export default function SessionDetailPage({
         />
       </div>
 
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-lg font-semibold mb-4">Conversation</h2>
-        <div className="space-y-4">
-          {data.messages.map((message, idx) => (
-            <MessageBubble
-              key={idx}
-              role={message.role}
-              content={message.content}
-              timestamp={message.timestamp}
-            />
-          ))}
-          {data.messages.length === 0 && (
-            <p className="text-center text-gray-500 py-8">
-              No messages recorded for this session
-            </p>
-          )}
-        </div>
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <Tabs value={tab} onChange={(v) => setTab(v as 'transcript' | 'debug')}>
+          <TabsList className="px-4">
+            <TabsTrigger value="transcript">Transcript</TabsTrigger>
+            <TabsTrigger value="debug">Debug</TabsTrigger>
+          </TabsList>
+          <TabsContent value="transcript">
+            <div className="grid grid-cols-1 md:grid-cols-[minmax(320px,2fr)_3fr] min-h-[500px]">
+              <div className="border-r border-gray-200 overflow-y-auto max-h-[calc(100vh-360px)]">
+                <EventList
+                  events={events}
+                  selectedIdx={safeIdx}
+                  onSelect={setSelectedIdx}
+                />
+              </div>
+              <div className="overflow-hidden max-h-[calc(100vh-360px)]">
+                <EventDetail event={events[safeIdx] ?? null} />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="debug">
+            <div className="max-h-[calc(100vh-360px)] overflow-auto p-4">
+              <pre className="text-xs bg-gray-50 rounded p-4 overflow-auto whitespace-pre">
+                {JSON.stringify(data, null, 2)}
+              </pre>
+            </div>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   )
