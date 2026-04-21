@@ -1,16 +1,30 @@
 'use client'
 
-import { use, Suspense } from 'react'
+import { use, Suspense, useState } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { subDays, format } from 'date-fns'
+import { Trash2 } from 'lucide-react'
 import { DateRangePicker } from '@/components/dashboard/date-range-picker'
-import { useDashboardSessions, type SessionSort } from '@/hooks/use-dashboard-sessions'
+import {
+  useDashboardSessions,
+  useDeleteSession,
+  type SessionSort,
+} from '@/hooks/use-dashboard-sessions'
 import { formatTokens, formatCost, formatDateTimeFull } from '@/lib/format'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/ui/pagination'
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
+import type { SessionItem } from '@argos/shared'
 
 const DEFAULT_PAGE_SIZE = 50
 
@@ -62,6 +76,9 @@ function SessionsContent({ projectId }: { projectId: string }) {
 
   const { data, isLoading, error, refetch, isPlaceholderData } =
     useDashboardSessions(projectId, from, to, page, pageSize, sort)
+
+  const [sessionToDelete, setSessionToDelete] = useState<SessionItem | null>(null)
+  const deleteMutation = useDeleteSession(projectId)
 
   const setQuery = (updates: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -180,12 +197,13 @@ function SessionsContent({ projectId }: { projectId: string }) {
                 <th className="text-right py-3 px-4 font-medium whitespace-nowrap">출력토큰</th>
                 <th className="text-right py-3 px-4 font-medium whitespace-nowrap">비용</th>
                 <th className="text-left py-3 px-4 font-medium whitespace-nowrap">시간</th>
+                <th className="w-10 py-3 px-2" aria-label="액션" />
               </tr>
             </thead>
             <tbody className="text-sm">
               {isOverflowPage ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center">
+                  <td colSpan={7} className="py-12 text-center">
                     <p className="text-sm text-muted-foreground mb-3">
                       이 페이지엔 데이터가 없습니다.
                     </p>
@@ -203,7 +221,7 @@ function SessionsContent({ projectId }: { projectId: string }) {
                   <tr
                     key={session.id}
                     onClick={() => handleRowClick(session.id)}
-                    className="border-b border-border last:border-b-0 hover:bg-muted/40 cursor-pointer transition-colors"
+                    className="group border-b border-border last:border-b-0 hover:bg-muted/40 cursor-pointer transition-colors"
                   >
                     <td className="py-3 px-4 whitespace-nowrap">{session.userName}</td>
                     <td className="py-3 px-4 max-w-md">
@@ -216,6 +234,23 @@ function SessionsContent({ projectId }: { projectId: string }) {
                     <td className="text-right py-3 px-4 whitespace-nowrap tabular-nums">{formatCost(session.estimatedCostUsd)}</td>
                     <td className="py-3 px-4 whitespace-nowrap tabular-nums text-muted-foreground">
                       {formatDateTimeFull(session.startedAt)}
+                    </td>
+                    <td className="py-3 px-2 w-10">
+                      <button
+                        type="button"
+                        aria-label="세션 삭제"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSessionToDelete(session)
+                        }}
+                        className={cn(
+                          'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground',
+                          'hover:bg-destructive/10 hover:text-destructive transition-colors',
+                          'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100',
+                        )}
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -242,6 +277,64 @@ function SessionsContent({ projectId }: { projectId: string }) {
           }
         />
       </div>
+
+      <AlertDialog
+        open={sessionToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) {
+            setSessionToDelete(null)
+            deleteMutation.reset()
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>세션을 삭제하시겠습니까?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {sessionToDelete?.title
+                ? `"${sessionToDelete.title}" 세션과`
+                : '이 세션과'}{' '}
+              연관된 모든 메시지·사용량·이벤트가 함께 삭제됩니다. 이 작업은
+              되돌릴 수 없습니다.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteMutation.isError && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertDescription>
+                삭제에 실패했습니다. 잠시 후 다시 시도해주세요.
+              </AlertDescription>
+            </Alert>
+          )}
+          <AlertDialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={deleteMutation.isPending}
+              onClick={() => {
+                setSessionToDelete(null)
+                deleteMutation.reset()
+              }}
+            >
+              취소
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={deleteMutation.isPending}
+              onClick={() => {
+                if (!sessionToDelete) return
+                deleteMutation.mutate(sessionToDelete.id, {
+                  onSuccess: () => {
+                    setSessionToDelete(null)
+                  },
+                })
+              }}
+            >
+              {deleteMutation.isPending ? '삭제 중…' : '삭제'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

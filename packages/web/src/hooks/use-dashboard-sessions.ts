@@ -1,8 +1,13 @@
 'use client'
 
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
-import { apiGet } from '@/lib/api-client'
+import { apiDelete, apiGet } from '@/lib/api-client'
 import type { PaginatedResult, SessionItem, SessionDetail } from '@argos/shared'
 
 export type SessionSort = 'recent' | 'cost'
@@ -29,6 +34,24 @@ export function useDashboardSessions(
     staleTime: 30_000,
     enabled: !!session?.argosToken,
     placeholderData: keepPreviousData,
+  })
+}
+
+export function useDeleteSession(projectId: string) {
+  const { data: session } = useSession()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (sessionId: string) =>
+      apiDelete(
+        `/api/projects/${projectId}/dashboard/sessions/${sessionId}`,
+        session?.argosToken ?? ''
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['dashboard', 'sessions', projectId],
+      })
+    },
   })
 }
 

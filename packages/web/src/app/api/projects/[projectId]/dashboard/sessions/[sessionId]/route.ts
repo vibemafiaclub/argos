@@ -118,3 +118,34 @@ export async function GET(
     return handleRouteError(err)
   }
 }
+
+// DELETE /api/projects/:projectId/dashboard/sessions/:sessionId
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ projectId: string; sessionId: string }> }
+) {
+  try {
+    const auth = await requireAuth(req)
+    if (auth instanceof NextResponse) return auth
+    const { userId } = auth
+    const { projectId, sessionId } = await params
+
+    const access = await assertProjectAccessOrResponse(projectId, userId)
+    if (access instanceof NextResponse) return access
+
+    const session = await db.claudeSession.findUnique({
+      where: { id: sessionId },
+      select: { projectId: true },
+    })
+
+    if (!session || session.projectId !== projectId) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    }
+
+    await db.claudeSession.delete({ where: { id: sessionId } })
+
+    return new NextResponse(null, { status: 204 })
+  } catch (err) {
+    return handleRouteError(err)
+  }
+}

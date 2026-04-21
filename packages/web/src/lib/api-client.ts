@@ -60,3 +60,27 @@ export async function apiPatch<T>(
 
   return res.json()
 }
+
+export async function apiDelete(path: string, token: string): Promise<void> {
+  const res = await fetch(path, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!res.ok) {
+    let code: string | undefined
+    let message = `API request failed: ${res.status} ${res.statusText}`
+    try {
+      const data = (await res.json()) as {
+        error?: { code?: string; message?: string }
+      }
+      if (data?.error?.code) code = data.error.code
+      if (data?.error?.message) message = data.error.message
+    } catch {
+      // non-JSON error body — 기본 메시지 유지
+    }
+    throw new ApiError(res.status, message, code)
+  }
+}
