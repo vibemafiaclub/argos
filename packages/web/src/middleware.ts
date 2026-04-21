@@ -8,9 +8,9 @@ export default auth((req) => {
   const request = req as unknown as AuthedRequest
   const isLoggedIn = !!request.auth
   const pathname = request.nextUrl?.pathname ?? request.url
-  const isDashboard = pathname.startsWith('/dashboard')
+  const isProtected = pathname.startsWith('/dashboard')
 
-  if (isDashboard && !isLoggedIn) {
+  if (isProtected && !isLoggedIn) {
     const loginUrl = new URL('/login', request.nextUrl?.origin ?? request.url)
     return NextResponse.redirect(loginUrl)
   }
