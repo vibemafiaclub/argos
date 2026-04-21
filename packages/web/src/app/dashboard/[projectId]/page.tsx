@@ -12,8 +12,7 @@ import { SkillFrequencyChart } from '@/components/dashboard/skill-frequency-char
 import { ModelShareChart } from '@/components/dashboard/model-share-chart'
 import { TopUsersList } from '@/components/dashboard/top-users-list'
 import { RecentSessionsList } from '@/components/dashboard/recent-sessions-list'
-import { useDashboardSummary } from '@/hooks/use-dashboard-summary'
-import { useDashboardUsage } from '@/hooks/use-dashboard-usage'
+import { useDashboardOverview } from '@/hooks/use-dashboard-overview'
 import { useDashboardUsers } from '@/hooks/use-dashboard-users'
 import { useDashboardSessions } from '@/hooks/use-dashboard-sessions'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -43,10 +42,10 @@ function OverviewContent({ projectId }: { projectId: string }) {
   const fromDate = new Date(from)
   const toDate = new Date(to)
 
-  const { data: summary, isLoading: summaryLoading, error: summaryError, refetch: refetchSummary } =
-    useDashboardSummary(projectId, from, to)
-  const { data: usage, isLoading: usageLoading, error: usageError, refetch: refetchUsage } =
-    useDashboardUsage(projectId, from, to)
+  const { data: overview, isLoading: overviewLoading, error: overviewError, refetch: refetchOverview } =
+    useDashboardOverview(projectId, from, to)
+  const summary = overview?.summary
+  const usage = overview?.usage
 
   // Top 5 users by tokens, always last 7 days (independent of the main date range)
   const sevenDaysAgo = format(subDays(today, 7), 'yyyy-MM-dd')
@@ -58,7 +57,7 @@ function OverviewContent({ projectId }: { projectId: string }) {
   const { data: recentSessionsData, isLoading: sessionsLoading } =
     useDashboardSessions(projectId, from, to, 1, 10)
 
-  if (summaryLoading || usageLoading) {
+  if (overviewLoading) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-40 w-full" />
@@ -76,7 +75,7 @@ function OverviewContent({ projectId }: { projectId: string }) {
     )
   }
 
-  if (summaryError || usageError) {
+  if (overviewError) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold">Overview</h1>
@@ -87,8 +86,7 @@ function OverviewContent({ projectId }: { projectId: string }) {
               variant="outline"
               size="sm"
               onClick={() => {
-                refetchSummary()
-                refetchUsage()
+                refetchOverview()
               }}
             >
               재시도

@@ -36,6 +36,12 @@ export interface UsageSeries {
   estimatedCostUsd: number
 }
 
+/** summary + usage를 한 번에 반환하는 overview 엔드포인트 응답 */
+export interface DashboardOverview {
+  summary: DashboardSummary
+  usage: { series: UsageSeries[] }
+}
+
 export interface UserStat {
   userId: string
   name: string

@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import type { UsageSeries } from '@argos/shared'
+import type { DashboardOverview, DashboardSummary, UsageSeries } from '@argos/shared'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
 import { parseDateRange } from '@/lib/server/dashboard'
 import { assertProjectAccessOrResponse } from '@/lib/server/dashboard-route-helper'
-import { getDailyRollups, aggregateUsageSeries } from '@/lib/server/daily-rollup'
+import {
+  getDailyRollups,
+  aggregateSummary,
+  aggregateUsageSeries,
+} from '@/lib/server/daily-rollup'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// GET /api/projects/:projectId/dashboard/usage
+// GET /api/projects/:projectId/dashboard/overview
+// summary + usage를 한 번의 rollup 계산으로 반환한다.
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
@@ -28,11 +33,26 @@ export async function GET(
     const { from, to } = parseDateRange(fromQuery, toQuery)
 
     const rollups = await getDailyRollups(projectId, from, to)
+
+    const agg = aggregateSummary(rollups, 5)
+    const summary: DashboardSummary = {
+      sessionCount: agg.sessionCount,
+      turnCount: agg.turnCount,
+      activeUserCount: agg.activeUserCount,
+      totalInputTokens: agg.inputTokens,
+      totalOutputTokens: agg.outputTokens,
+      totalCacheReadTokens: agg.cacheReadTokens,
+      totalCacheCreationTokens: agg.cacheCreationTokens,
+      estimatedCostUsd: agg.estimatedCostUsd,
+      topSkills: agg.topSkills,
+      topAgents: agg.topAgents,
+      modelShare: agg.modelShare,
+    }
+
     const series: UsageSeries[] = aggregateUsageSeries(rollups)
 
-    // 비어있는 rollup(토큰 0)은 프런트에서 빈 bar로 표시할 필요가 있으면 유지,
-    // 없애고 싶으면 여기서 filter하면 됨. 기본값은 모두 포함.
-    return NextResponse.json({ series })
+    const body: DashboardOverview = { summary, usage: { series } }
+    return NextResponse.json(body)
   } catch (err) {
     return handleRouteError(err)
   }

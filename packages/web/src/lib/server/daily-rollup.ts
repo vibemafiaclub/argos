@@ -76,6 +76,33 @@ function utcTodayStart(): Date {
   return utcDayStart(new Date())
 }
 
+// ─── Today's live rollup in-memory cache (per-process) ─────────────────────
+// 오늘 치는 DB 캐시 없이 매 요청 live 집계하므로 비싸다.
+// 같은 프로세스 내에서 30초간 결과를 공유해 summary/usage/users가 중복 계산하지 않도록 한다.
+// Vercel serverless는 인스턴스당 per-instance라 best-effort 성격.
+
+const TODAY_ROLLUP_TTL_MS = 30_000
+const todayRollupCache = new Map<string, { expiresAt: number; rollup: DailyRollup }>()
+
+function todayCacheKey(projectId: string, dayStart: Date): string {
+  return `${projectId}:${dayStart.toISOString()}`
+}
+
+async function computeDailyRollupCachedForToday(
+  projectId: string,
+  date: Date,
+): Promise<DailyRollup> {
+  const key = todayCacheKey(projectId, utcDayStart(date))
+  const now = Date.now()
+  const entry = todayRollupCache.get(key)
+  if (entry && entry.expiresAt > now) {
+    return entry.rollup
+  }
+  const rollup = await computeDailyRollup(projectId, date)
+  todayRollupCache.set(key, { expiresAt: now + TODAY_ROLLUP_TTL_MS, rollup })
+  return rollup
+}
+
 // ─── Core: compute one day's rollup from raw tables ────────────────────────
 
 async function computeDailyRollup(projectId: string, date: Date): Promise<DailyRollup> {
@@ -347,18 +374,28 @@ export async function getDailyRollups(
     const allDays = enumerateUtcDates(fromDay, toDay)
     const missingDays = allDays.filter(d => !cachedResults.has(toDateKey(d)))
 
-    // 동시 요청을 대비해 순차적으로 upsert.
-    for (const day of missingDays) {
-      const computed = await computeDailyRollup(projectId, day)
-      await upsertRollup(projectId, day, computed)
-      cachedResults.set(computed.date, computed)
+    // 날짜 병렬도 4로 cold rollup 계산. 하루당 내부 쿼리 8개 × 4 = 최대 32 concurrent.
+    // 서로 다른 (projectId, date) primary key이므로 upsert 간 충돌은 없다.
+    const DAY_CONCURRENCY = 4
+    for (let i = 0; i < missingDays.length; i += DAY_CONCURRENCY) {
+      const batch = missingDays.slice(i, i + DAY_CONCURRENCY)
+      const computedBatch = await Promise.all(
+        batch.map(async (day) => {
+          const computed = await computeDailyRollup(projectId, day)
+          await upsertRollup(projectId, day, computed)
+          return computed
+        }),
+      )
+      for (const computed of computedBatch) {
+        cachedResults.set(computed.date, computed)
+      }
     }
   }
 
-  // 오늘(또는 to가 오늘) → live 계산 (캐시 없음)
+  // 오늘(또는 to가 오늘) → live 계산 (DB 캐시 없음, 30초 메모리 캐시만)
   let liveToday: DailyRollup | null = null
   if (to.getTime() >= today.getTime()) {
-    liveToday = await computeDailyRollup(projectId, today)
+    liveToday = await computeDailyRollupCachedForToday(projectId, today)
   }
 
   const result: DailyRollup[] = []
