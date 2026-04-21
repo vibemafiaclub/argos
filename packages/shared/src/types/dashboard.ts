@@ -72,8 +72,11 @@ export interface SessionDetailMessage {
   content: string
   sequence: number
   timestamp: string
-  /** 이 메시지 구간에 귀속되는 usageRecord outputTokens 합 (ASSISTANT 메시지 외에는 보통 0) */
+  /** 이 메시지 구간에 귀속되는 usageRecord 합계 (ASSISTANT 메시지 외에는 보통 0) */
   outputTokens: number
+  inputTokens: number
+  estimatedCostUsd: number
+  model?: string | null
   // TOOL role 전용
   toolName?: string | null
   toolInput?: Record<string, unknown> | null

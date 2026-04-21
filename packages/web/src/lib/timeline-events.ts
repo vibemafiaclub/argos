@@ -7,6 +7,9 @@ export type MessageEvent = {
   timestamp: string
   sequence: number
   outputTokens: number
+  inputTokens: number
+  estimatedCostUsd: number
+  model: string | null
 }
 
 export type ToolEvent = {
@@ -65,6 +68,9 @@ export function messagesToTimeline(messages: SessionDetail['messages']): Timelin
       timestamp: m.timestamp,
       sequence: m.sequence,
       outputTokens: m.outputTokens ?? 0,
+      inputTokens: m.inputTokens ?? 0,
+      estimatedCostUsd: m.estimatedCostUsd ?? 0,
+      model: m.model ?? null,
     }
   })
 

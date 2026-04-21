@@ -448,9 +448,15 @@ dashboard.get('/sessions/:sessionId', async (c) => {
     isSubagent: r.isSubagent,
   }))
 
-  // 각 UsageRecord를 "직전 ASSISTANT 턴"에 귀속시켜 메시지별 outputTokens 합산.
+  // 각 UsageRecord를 "직전 ASSISTANT 턴"에 귀속시켜 메시지별 토큰/비용/모델 집계.
   // TOOL 메시지는 건너뛰고 가장 가까운 선행 ASSISTANT로 타고 올라감.
-  const messageOutputTokens = new Array(session.messages.length).fill(0) as number[]
+  type MsgAgg = { outputTokens: number; inputTokens: number; cost: number; model: string | null }
+  const msgAgg: MsgAgg[] = session.messages.map(() => ({
+    outputTokens: 0,
+    inputTokens: 0,
+    cost: 0,
+    model: null,
+  }))
   {
     let msgIdx = -1
     for (const u of session.usageRecords) {
@@ -463,7 +469,11 @@ dashboard.get('/sessions/:sessionId', async (c) => {
       let ownerIdx = msgIdx
       while (ownerIdx >= 0 && session.messages[ownerIdx].role === 'TOOL') ownerIdx--
       if (ownerIdx >= 0 && session.messages[ownerIdx].role === 'ASSISTANT') {
-        messageOutputTokens[ownerIdx] += u.outputTokens
+        const agg = msgAgg[ownerIdx]
+        agg.outputTokens += u.outputTokens
+        agg.inputTokens += u.inputTokens
+        agg.cost += u.estimatedCostUsd ?? 0
+        if (!agg.model && u.model) agg.model = u.model
       }
     }
   }
@@ -483,7 +493,10 @@ dashboard.get('/sessions/:sessionId', async (c) => {
       content: m.content,
       sequence: m.sequence,
       timestamp: m.timestamp.toISOString(),
-      outputTokens: messageOutputTokens[i],
+      outputTokens: msgAgg[i].outputTokens,
+      inputTokens: msgAgg[i].inputTokens,
+      estimatedCostUsd: msgAgg[i].cost,
+      model: msgAgg[i].model,
       toolName: m.toolName,
       toolInput: m.toolInput as Record<string, unknown> | null,
       toolUseId: m.toolUseId,
