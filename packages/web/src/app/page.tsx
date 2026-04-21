@@ -10,7 +10,7 @@ const AI_AGENT_INSTALL_PROMPT = `이 프로젝트에 Argos를 설치해줘. Argo
 
 다음 3단계로 진행:
 
-1. \`npm install -g @argos-ai/cli\` 로 CLI를 전역 설치.
+1. \`npm install -g argos-ai\` 로 CLI를 전역 설치.
 2. 프로젝트 루트에서 \`argos\` 를 실행. 브라우저 기반 로그인과 프로젝트 초기화가 진행되는데, 이 단계는 사용자 인증이 필요하므로 사용자에게 직접 실행을 요청하고 완료 확인을 받은 뒤 다음 단계로 넘어갈 것.
 3. 생성·수정된 파일을 커밋:
    git add .argos/project.json .claude/settings.json
@@ -282,7 +282,7 @@ export default async function Home() {
               <InstallStep
                 n={1}
                 label="CLI 설치"
-                cmd="npm install -g @argos-ai/cli"
+                cmd="npm install -g argos-ai"
               />
               <InstallStep
                 n={2}

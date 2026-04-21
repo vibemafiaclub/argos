@@ -43,7 +43,7 @@ export function EmptyState({ email }: EmptyStateProps) {
               <div>
                 <p className="text-foreground font-medium">Install the Argos CLI</p>
                 <code className="block mt-1 bg-muted px-3 py-1.5 rounded text-xs font-mono">
-                  npm install -g @argos-ai/cli
+                  npm install -g argos-ai
                 </code>
               </div>
             </li>
