@@ -6,13 +6,19 @@ import { signOut } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { ProjectSwitcher } from './project-switcher'
 
-const navItems = [
+const topNavItems = [
   { label: 'Overview', href: '' },
-  { label: 'Users', href: '/users' },
   { label: 'Skills', href: '/skills' },
   { label: 'Agents', href: '/agents' },
   { label: 'Sessions', href: '/sessions' },
 ]
+
+const bottomNavItems = [
+  { label: 'Users', href: '/users' },
+  { label: 'Settings', href: '/settings' },
+]
+
+const mobileNavItems = [...topNavItems, ...bottomNavItems]
 
 export function Sidebar() {
   const params = useParams()
@@ -21,6 +27,47 @@ export function Sidebar() {
 
   const handleLogout = async () => {
     await signOut({ callbackUrl: '/login' })
+  }
+
+  const renderLink = (
+    item: { label: string; href: string },
+    variant: 'desktop' | 'mobile'
+  ) => {
+    const href = `/dashboard/${projectId}${item.href}`
+    const isActive =
+      pathname === href || (item.href !== '' && pathname.startsWith(href))
+
+    if (variant === 'desktop') {
+      return (
+        <Link
+          key={item.href}
+          href={href}
+          className={cn(
+            'block px-3 py-2 rounded-md text-sm font-medium transition-colors',
+            isActive
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+          )}
+        >
+          {item.label}
+        </Link>
+      )
+    }
+
+    return (
+      <Link
+        key={item.href}
+        href={href}
+        className={cn(
+          'px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors',
+          isActive
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-secondary text-secondary-foreground hover:bg-muted'
+        )}
+      >
+        {item.label}
+      </Link>
+    )
   }
 
   return (
@@ -33,25 +80,13 @@ export function Sidebar() {
         <div className="px-3 pb-3">
           <ProjectSwitcher />
         </div>
-        <nav className="px-3 space-y-1 flex-1">
-          {navItems.map((item) => {
-            const href = `/dashboard/${projectId}${item.href}`
-            const isActive = pathname === href || (item.href !== '' && pathname.startsWith(href))
-            return (
-              <Link
-                key={item.href}
-                href={href}
-                className={cn(
-                  'block px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                )}
-              >
-                {item.label}
-              </Link>
-            )
-          })}
+        <nav className="px-3 space-y-1 flex-1 flex flex-col">
+          <div className="space-y-1">
+            {topNavItems.map((item) => renderLink(item, 'desktop'))}
+          </div>
+          <div className="mt-auto space-y-1">
+            {bottomNavItems.map((item) => renderLink(item, 'desktop'))}
+          </div>
         </nav>
         <div className="p-3 border-t">
           <button
@@ -78,24 +113,7 @@ export function Sidebar() {
           </button>
         </div>
         <nav className="flex overflow-x-auto px-2 pb-2 gap-1">
-          {navItems.map((item) => {
-            const href = `/dashboard/${projectId}${item.href}`
-            const isActive = pathname === href || (item.href !== '' && pathname.startsWith(href))
-            return (
-              <Link
-                key={item.href}
-                href={href}
-                className={cn(
-                  'px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors',
-                  isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-secondary text-secondary-foreground hover:bg-muted'
-                )}
-              >
-                {item.label}
-              </Link>
-            )
-          })}
+          {mobileNavItems.map((item) => renderLink(item, 'mobile'))}
         </nav>
       </div>
     </>

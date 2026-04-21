@@ -16,3 +16,47 @@ export async function apiGet<T>(path: string, token: string): Promise<T> {
 
   return res.json()
 }
+
+export class ApiError extends Error {
+  status: number
+  code?: string
+
+  constructor(status: number, message: string, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+  }
+}
+
+export async function apiPatch<T>(
+  path: string,
+  token: string,
+  body: unknown
+): Promise<T> {
+  const res = await fetch(path, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    let code: string | undefined
+    let message = `API request failed: ${res.status} ${res.statusText}`
+    try {
+      const data = (await res.json()) as {
+        error?: { code?: string; message?: string }
+      }
+      if (data?.error?.code) code = data.error.code
+      if (data?.error?.message) message = data.error.message
+    } catch {
+      // non-JSON error body — 기본 메시지 유지
+    }
+    throw new ApiError(res.status, message, code)
+  }
+
+  return res.json()
+}

@@ -5,6 +5,10 @@ export const CreateProjectSchema = z.object({
   orgId: z.string().optional(),
 })
 
+export const UpdateProjectSchema = z.object({
+  name: z.string().min(1).max(100),
+})
+
 export const JoinOrgSchema = z.object({
   orgId: z.string(),
 })

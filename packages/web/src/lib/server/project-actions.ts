@@ -93,3 +93,70 @@ export async function getProjectForUser(
     },
   }
 }
+
+export type UpdateProjectForUserResult =
+  | { kind: 'ok'; project: ProjectDetail }
+  | { kind: 'not_found' }
+  | { kind: 'forbidden' }
+  | { kind: 'name_conflict' }
+
+export async function updateProjectForUser(
+  projectId: string,
+  userId: string,
+  input: { name: string }
+): Promise<UpdateProjectForUserResult> {
+  const existing = await db.project.findUnique({
+    where: { id: projectId },
+    select: {
+      id: true,
+      orgId: true,
+      organization: {
+        select: {
+          memberships: {
+            where: { userId },
+            select: { id: true },
+            take: 1,
+          },
+        },
+      },
+    },
+  })
+
+  if (!existing) {
+    return { kind: 'not_found' }
+  }
+
+  if (existing.organization.memberships.length === 0) {
+    return { kind: 'forbidden' }
+  }
+
+  const duplicate = await db.project.findFirst({
+    where: {
+      orgId: existing.orgId,
+      name: input.name,
+      NOT: { id: projectId },
+    },
+    select: { id: true },
+  })
+
+  if (duplicate) {
+    return { kind: 'name_conflict' }
+  }
+
+  const updated = await db.project.update({
+    where: { id: projectId },
+    data: { name: input.name },
+    select: {
+      id: true,
+      orgId: true,
+      name: true,
+      slug: true,
+      createdAt: true,
+    },
+  })
+
+  return {
+    kind: 'ok',
+    project: updated,
+  }
+}
