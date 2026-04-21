@@ -10,8 +10,7 @@ interface DefaultCommandOptions {
   apiUrl?: string
 }
 
-// TODO: 마이그레이션 완료 후 web 배포 도메인으로 변경 (예: 'https://argos.vercel.app')
-const DEFAULT_API_URL = 'https://server.argos-ai.xyz'
+const DEFAULT_API_URL = 'https://argos-ai.xyz'
 
 export const makeDefaultCommand: CommandFactory<DefaultCommandOptions> =
   (deps) => async (options) => {
