@@ -84,3 +84,36 @@ export function parseDateRange(from?: string, to?: string): DateRange {
 
   return { from: fromDate, to: toDate }
 }
+
+export interface PaginationParams {
+  page: number
+  pageSize: number
+  skip: number
+  take: number
+}
+
+const DEFAULT_PAGE_SIZE = 50
+const MAX_PAGE_SIZE = 100
+const MIN_PAGE_SIZE = 10
+
+/**
+ * ?page=&pageSize= 쿼리스트링 파싱 (기본 page=1, pageSize=50, pageSize는 [10,100]으로 clamp)
+ */
+export function parsePagination(
+  pageQuery?: string | null,
+  pageSizeQuery?: string | null
+): PaginationParams {
+  const parsedPage = Number(pageQuery)
+  const page = Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1
+
+  const parsedSize = Number(pageSizeQuery)
+  const rawSize = Number.isFinite(parsedSize) && parsedSize > 0 ? Math.floor(parsedSize) : DEFAULT_PAGE_SIZE
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(MIN_PAGE_SIZE, rawSize))
+
+  return {
+    page,
+    pageSize,
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+  }
+}

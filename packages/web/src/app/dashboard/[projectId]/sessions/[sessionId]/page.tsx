@@ -195,8 +195,8 @@ export default function SessionDetailPage({
                 sessionStartedAt={data.startedAt}
               />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-[minmax(320px,2fr)_3fr] min-h-[500px]">
-              <div className="border-r border-border overflow-y-auto max-h-[calc(100vh-360px)]">
+            <div className="grid grid-cols-1 md:grid-cols-[minmax(320px,2fr)_3fr] h-[calc(100vh-360px)] min-h-[500px]">
+              <div className="border-r border-border">
                 <EventList
                   events={events}
                   selectedIdx={safeIdx ?? -1}

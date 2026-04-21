@@ -1,22 +1,29 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import { apiGet } from '@/lib/api-client'
-import type { SessionItem, SessionDetail } from '@argos/shared'
+import type { PaginatedResult, SessionItem, SessionDetail } from '@argos/shared'
 
-export function useDashboardSessions(projectId: string, from: string, to: string) {
+export function useDashboardSessions(
+  projectId: string,
+  from: string,
+  to: string,
+  page: number,
+  pageSize: number,
+) {
   const { data: session } = useSession()
 
   return useQuery({
-    queryKey: ['dashboard', 'sessions', projectId, from, to],
+    queryKey: ['dashboard', 'sessions', projectId, from, to, page, pageSize],
     queryFn: () =>
-      apiGet<{ sessions: SessionItem[] }>(
-        `/api/projects/${projectId}/dashboard/sessions?from=${from}&to=${to}`,
+      apiGet<PaginatedResult<SessionItem>>(
+        `/api/projects/${projectId}/dashboard/sessions?from=${from}&to=${to}&page=${page}&pageSize=${pageSize}`,
         session?.argosToken ?? ''
       ),
     staleTime: 30_000,
     enabled: !!session?.argosToken,
+    placeholderData: keepPreviousData,
   })
 }
 

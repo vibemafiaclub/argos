@@ -106,6 +106,9 @@ importers:
       react-markdown:
         specifier: ^10.1.0
         version: 10.1.0(@types/react@19.2.14)(react@19.2.5)
+      react-window:
+        specifier: ^2.2.7
+        version: 2.2.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       recharts:
         specifier: ^2
         version: 2.15.4(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -3544,6 +3547,12 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
       react-dom: '>=16.6.0'
+
+  react-window@2.2.7:
+    resolution: {integrity: sha512-SH5nvfUQwGHYyriDUAOt7wfPsfG9Qxd6OdzQxl5oQ4dsSsUicqQvjV7dR+NqZ4coY0fUn3w1jnC5PwzIUWEg5w==, tarball: https://registry.npmjs.org/react-window/-/react-window-2.2.7.tgz}
+    peerDependencies:
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
 
   react@19.2.5:
     resolution: {integrity: sha512-llUJLzz1zTUBrskt2pwZgLq59AemifIftw4aB7JxOqf1HY2FDaGDxgwpAPVzHU1kdWabH7FauP4i1oEeer2WCA==, tarball: https://registry.npmjs.org/react/-/react-19.2.5.tgz}
@@ -7816,6 +7825,11 @@ snapshots:
       dom-helpers: 5.2.1
       loose-envify: 1.4.0
       prop-types: 15.8.1
+      react: 19.2.5
+      react-dom: 19.2.5(react@19.2.5)
+
+  react-window@2.2.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5):
+    dependencies:
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
 

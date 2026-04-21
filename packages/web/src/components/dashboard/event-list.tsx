@@ -1,10 +1,12 @@
-import { Fragment, useState } from "react";
+import { useMemo, useState } from "react";
+import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
   SLASH_COMMAND_TAG_RE,
   type TimelineEvent,
   type ToolEvent,
 } from "@/lib/timeline-events";
+import { cn } from "@/lib/utils";
 
 type EventListProps = {
   events: TimelineEvent[];
@@ -20,6 +22,27 @@ type Group =
       toolName: string;
       items: { event: ToolEvent; idx: number }[];
     };
+
+type FlatRow =
+  | {
+      kind: "event";
+      key: string;
+      event: TimelineEvent;
+      idx: number;
+      indented: boolean;
+      labelOverride?: string;
+    }
+  | {
+      kind: "groupHeader";
+      key: string;
+      toolName: string;
+      count: number;
+      firstEvent: TimelineEvent;
+      groupFirstIdx: number;
+      isExpanded: boolean;
+    };
+
+const ROW_HEIGHT = 36;
 
 function formatElapsed(timestamp: string, sessionStartedAt: string): string {
   const t = new Date(timestamp).getTime();
@@ -61,6 +84,65 @@ function buildGroups(events: TimelineEvent[]): Group[] {
   return groups;
 }
 
+function buildFlatRows(
+  events: TimelineEvent[],
+  expandedGroups: Set<number>,
+  selectedIdx: number,
+): FlatRow[] {
+  const groups = buildGroups(events);
+  const rows: FlatRow[] = [];
+  for (const group of groups) {
+    if (group.kind === "single") {
+      rows.push({
+        kind: "event",
+        key: `s-${group.idx}`,
+        event: group.event,
+        idx: group.idx,
+        indented: false,
+      });
+      continue;
+    }
+    if (group.items.length === 1) {
+      const { event, idx } = group.items[0];
+      rows.push({
+        kind: "event",
+        key: `gs-${idx}`,
+        event,
+        idx,
+        indented: false,
+        labelOverride: "Tool",
+      });
+      continue;
+    }
+    const firstIdx = group.items[0].idx;
+    const lastIdx = group.items[group.items.length - 1].idx;
+    const containsSelected = selectedIdx >= firstIdx && selectedIdx <= lastIdx;
+    const isExpanded = expandedGroups.has(firstIdx) || containsSelected;
+    rows.push({
+      kind: "groupHeader",
+      key: `gh-${firstIdx}`,
+      toolName: group.toolName,
+      count: group.items.length,
+      firstEvent: group.items[0].event,
+      groupFirstIdx: firstIdx,
+      isExpanded,
+    });
+    if (isExpanded) {
+      for (const { event, idx } of group.items) {
+        rows.push({
+          kind: "event",
+          key: `gc-${idx}`,
+          event,
+          idx,
+          indented: true,
+          labelOverride: "Tool",
+        });
+      }
+    }
+  }
+  return rows;
+}
+
 function getSingleLabel(event: TimelineEvent): string {
   if (event.kind === "message") {
     return event.role === "HUMAN" ? "User" : "Agent";
@@ -95,7 +177,7 @@ function getIcon(event: TimelineEvent) {
   return { Icon: Wrench, bg: isSpecial ? "bg-chart-4" : "bg-muted-foreground" };
 }
 
-type RowProps = {
+type RowViewProps = {
   label: string;
   preview: string;
   time: string;
@@ -106,7 +188,7 @@ type RowProps = {
   chevron?: "collapsed" | "expanded";
 };
 
-function Row({
+function RowView({
   label,
   preview,
   time,
@@ -115,22 +197,25 @@ function Row({
   onClick,
   indented = false,
   chevron,
-}: RowProps) {
+}: RowViewProps) {
   const { Icon, bg } = icon;
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left flex items-center gap-3 py-2 transition-colors ${
-        indented ? "pl-10 pr-3" : "px-3"
-      } ${
+      className={cn(
+        "w-full h-full text-left flex items-center gap-3 py-2 border-b border-border/60 transition-colors",
+        indented ? "pl-10 pr-3" : "px-3",
         isSelected
-          ? "border-l-2 border-brand bg-brand-subtle"
-          : "border-l-2 border-transparent hover:bg-muted/50"
-      }`}
+          ? "border-l-2 border-l-brand bg-brand-subtle"
+          : "border-l-2 border-l-transparent hover:bg-muted/50",
+      )}
     >
       <span
-        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${bg}`}
+        className={cn(
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
+          bg,
+        )}
       >
         <Icon className="h-3 w-3 text-background" />
       </span>
@@ -140,9 +225,10 @@ function Row({
       <span className="flex-1 min-w-0 flex items-center gap-1 text-sm text-muted-foreground">
         {chevron !== undefined && (
           <ChevronRight
-            className={`h-3 w-3 shrink-0 transition-transform ${
-              chevron === "expanded" ? "rotate-90" : ""
-            }`}
+            className={cn(
+              "h-3 w-3 shrink-0 transition-transform",
+              chevron === "expanded" && "rotate-90",
+            )}
           />
         )}
         <span className="truncate">{preview}</span>
@@ -154,6 +240,64 @@ function Row({
   );
 }
 
+type RowProps = {
+  rows: FlatRow[];
+  selectedIdx: number;
+  sessionStartedAt: string;
+  onSelect: (idx: number) => void;
+  onToggleGroup: (firstIdx: number) => void;
+};
+
+function Row({
+  index,
+  style,
+  rows,
+  selectedIdx,
+  sessionStartedAt,
+  onSelect,
+  onToggleGroup,
+}: RowComponentProps<RowProps>) {
+  const row = rows[index];
+  if (!row) return null;
+
+  if (row.kind === "groupHeader") {
+    return (
+      <div style={style} role="listitem">
+        <RowView
+          label="Tool"
+          preview={`${row.toolName} x${row.count}`}
+          time={formatElapsed(row.firstEvent.timestamp, sessionStartedAt)}
+          icon={getIcon(row.firstEvent)}
+          isSelected={false}
+          onClick={() => onToggleGroup(row.groupFirstIdx)}
+          chevron={row.isExpanded ? "expanded" : "collapsed"}
+        />
+      </div>
+    );
+  }
+
+  const label = row.labelOverride ?? getSingleLabel(row.event);
+  const preview = row.labelOverride === "Tool"
+    ? row.event.kind === "tool"
+      ? row.event.toolName
+      : getSinglePreview(row.event)
+    : getSinglePreview(row.event);
+
+  return (
+    <div style={style} role="listitem">
+      <RowView
+        label={label}
+        preview={preview}
+        time={formatElapsed(row.event.timestamp, sessionStartedAt)}
+        icon={getIcon(row.event)}
+        isSelected={row.idx === selectedIdx}
+        onClick={() => onSelect(row.idx)}
+        indented={row.indented}
+      />
+    </div>
+  );
+}
+
 export function EventList({
   events,
   selectedIdx,
@@ -162,15 +306,10 @@ export function EventList({
 }: EventListProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
 
-  if (events.length === 0) {
-    return (
-      <div className="p-6 text-center text-sm text-muted-foreground">
-        No events recorded
-      </div>
-    );
-  }
-
-  const groups = buildGroups(events);
+  const rows = useMemo(
+    () => buildFlatRows(events, expandedGroups, selectedIdx),
+    [events, expandedGroups, selectedIdx],
+  );
 
   const toggleGroup = (key: number) => {
     setExpandedGroups((prev) => {
@@ -181,78 +320,28 @@ export function EventList({
     });
   };
 
+  if (events.length === 0) {
+    return (
+      <div className="p-6 text-center text-sm text-muted-foreground">
+        No events recorded
+      </div>
+    );
+  }
+
   return (
-    <ul className="divide-y divide-border">
-      {groups.map((group) => {
-        if (group.kind === "single") {
-          const { event, idx } = group;
-          return (
-            <li key={idx}>
-              <Row
-                label={getSingleLabel(event)}
-                preview={getSinglePreview(event)}
-                time={formatElapsed(event.timestamp, sessionStartedAt)}
-                icon={getIcon(event)}
-                isSelected={idx === selectedIdx}
-                onClick={() => onSelect(idx)}
-              />
-            </li>
-          );
-        }
-
-        if (group.items.length === 1) {
-          const { event, idx } = group.items[0];
-          return (
-            <li key={idx}>
-              <Row
-                label="Tool"
-                preview={event.toolName}
-                time={formatElapsed(event.timestamp, sessionStartedAt)}
-                icon={getIcon(event)}
-                isSelected={idx === selectedIdx}
-                onClick={() => onSelect(idx)}
-              />
-            </li>
-          );
-        }
-
-        const firstIdx = group.items[0].idx;
-        const lastIdx = group.items[group.items.length - 1].idx;
-        const containsSelected =
-          selectedIdx >= firstIdx && selectedIdx <= lastIdx;
-        const isExpanded = expandedGroups.has(firstIdx) || containsSelected;
-        const firstEvent = group.items[0].event;
-
-        return (
-          <Fragment key={`group-${firstIdx}`}>
-            <li>
-              <Row
-                label="Tool"
-                preview={`${group.toolName} x${group.items.length}`}
-                time={formatElapsed(firstEvent.timestamp, sessionStartedAt)}
-                icon={getIcon(firstEvent)}
-                isSelected={false}
-                onClick={() => toggleGroup(firstIdx)}
-                chevron={isExpanded ? "expanded" : "collapsed"}
-              />
-            </li>
-            {isExpanded &&
-              group.items.map(({ event, idx }) => (
-                <li key={idx}>
-                  <Row
-                    label="Tool"
-                    preview={event.toolName}
-                    time={formatElapsed(event.timestamp, sessionStartedAt)}
-                    icon={getIcon(event)}
-                    isSelected={idx === selectedIdx}
-                    onClick={() => onSelect(idx)}
-                    indented
-                  />
-                </li>
-              ))}
-          </Fragment>
-        );
-      })}
-    </ul>
+    <List
+      rowComponent={Row}
+      rowCount={rows.length}
+      rowHeight={ROW_HEIGHT}
+      rowProps={{
+        rows,
+        selectedIdx,
+        sessionStartedAt,
+        onSelect,
+        onToggleGroup: toggleGroup,
+      }}
+      overscanCount={8}
+      style={{ height: "100%", width: "100%" }}
+    />
   );
 }

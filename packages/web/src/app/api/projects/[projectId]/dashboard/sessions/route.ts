@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import type { SessionItem } from '@argos/shared'
+import type { PaginatedResult, SessionItem } from '@argos/shared'
 import { db } from '@/lib/server/db'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
-import { parseDateRange } from '@/lib/server/dashboard'
+import { parseDateRange, parsePagination } from '@/lib/server/dashboard'
 import { assertProjectAccessOrResponse } from '@/lib/server/dashboard-route-helper'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// GET /api/projects/:projectId/dashboard/sessions
+// GET /api/projects/:projectId/dashboard/sessions?page=&pageSize=&from=&to=
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
@@ -27,30 +27,41 @@ export async function GET(
     const toQuery = req.nextUrl.searchParams.get('to') ?? undefined
     const { from, to } = parseDateRange(fromQuery, toQuery)
 
-    const sessions = await db.claudeSession.findMany({
-      where: {
-        projectId,
-        startedAt: { gte: from, lte: to }
-      },
-      include: {
-        user: { select: { id: true, name: true } },
-        usageRecords: {
-          select: { inputTokens: true, outputTokens: true, estimatedCostUsd: true }
-        },
-        // Title fallback — 저장된 title이 없는 세션용으로 첫 HUMAN 메시지 1건만 로딩
-        messages: {
-          where: { role: 'HUMAN' },
-          orderBy: [{ timestamp: 'asc' }, { sequence: 'asc' }],
-          take: 1,
-          select: { content: true }
-        },
-        _count: { select: { events: true } }
-      },
-      orderBy: { startedAt: 'desc' },
-      take: 100
-    })
+    const { page, pageSize, skip, take } = parsePagination(
+      req.nextUrl.searchParams.get('page'),
+      req.nextUrl.searchParams.get('pageSize'),
+    )
 
-    const sessionItems: SessionItem[] = sessions.map(s => {
+    const where = {
+      projectId,
+      startedAt: { gte: from, lte: to },
+    }
+
+    const [sessions, total] = await Promise.all([
+      db.claudeSession.findMany({
+        where,
+        include: {
+          user: { select: { id: true, name: true } },
+          usageRecords: {
+            select: { inputTokens: true, outputTokens: true, estimatedCostUsd: true }
+          },
+          // Title fallback — 저장된 title이 없는 세션용으로 첫 HUMAN 메시지 1건만 로딩
+          messages: {
+            where: { role: 'HUMAN' },
+            orderBy: [{ timestamp: 'asc' }, { sequence: 'asc' }],
+            take: 1,
+            select: { content: true }
+          },
+          _count: { select: { events: true } }
+        },
+        orderBy: { startedAt: 'desc' },
+        skip,
+        take,
+      }),
+      db.claudeSession.count({ where }),
+    ])
+
+    const items: SessionItem[] = sessions.map(s => {
       const totalInput = s.usageRecords.reduce((sum, r) => sum + r.inputTokens, 0)
       const totalOutput = s.usageRecords.reduce((sum, r) => sum + r.outputTokens, 0)
       const totalCost = s.usageRecords.reduce((sum, r) => sum + (r.estimatedCostUsd ?? 0), 0)
@@ -71,7 +82,8 @@ export async function GET(
       }
     })
 
-    return NextResponse.json({ sessions: sessionItems })
+    const body: PaginatedResult<SessionItem> = { items, total, page, pageSize }
+    return NextResponse.json(body)
   } catch (err) {
     return handleRouteError(err)
   }
