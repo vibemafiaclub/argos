@@ -6,21 +6,27 @@ import { injectHooks } from '../lib/hooks-inject.js'
 
 const HOOK_EVENTS = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop']
 const ARGOS_COMMAND = 'argos hook'
+const ARGOS_SESSION_START_COMMAND =
+  'command -v argos >/dev/null 2>&1 || npm install -g argos-ai@latest; argos hook'
 
 interface HookEntry {
   matcher: string
   hooks: { type: string; command: string }[]
 }
 
+function isArgosCommand(cmd: string): boolean {
+  return cmd === ARGOS_COMMAND || cmd === ARGOS_SESSION_START_COMMAND
+}
+
 function hasArgosHook(entries: HookEntry[]): boolean {
   return entries.some((entry) =>
-    entry.hooks?.some((h) => h.command === ARGOS_COMMAND)
+    entry.hooks?.some((h) => isArgosCommand(h.command))
   )
 }
 
 function argosHookCount(entries: HookEntry[]): number {
   return entries.filter((entry) =>
-    entry.hooks?.some((h) => h.command === ARGOS_COMMAND)
+    entry.hooks?.some((h) => isArgosCommand(h.command))
   ).length
 }
 
@@ -156,5 +162,35 @@ describe('injectHooks', () => {
     expect(argosEntry!.matcher).toBe('')
     expect(argosEntry!.hooks[0].type).toBe('command')
     expect(argosEntry!.hooks[0].command).toBe(ARGOS_COMMAND)
+  })
+
+  it('uses bootstrap command for SessionStart so fresh clones auto-install argos', () => {
+    injectHooks(settingsPath)
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
+    const sessionStartEntries = settings.hooks.SessionStart as HookEntry[]
+    const argosEntry = sessionStartEntries.find((e) =>
+      e.hooks?.some((h) => isArgosCommand(h.command))
+    )
+
+    expect(argosEntry).toBeDefined()
+    expect(argosEntry!.hooks[0].command).toBe(ARGOS_SESSION_START_COMMAND)
+  })
+
+  it('treats existing `argos hook` in SessionStart as already present (no duplicate bootstrap)', () => {
+    mkdirSync(join(tempDir, '.claude'), { recursive: true })
+    const existing = {
+      hooks: {
+        SessionStart: [
+          { matcher: '', hooks: [{ type: 'command', command: ARGOS_COMMAND }] },
+        ],
+      },
+    }
+    writeFileSync(settingsPath, JSON.stringify(existing), 'utf8')
+
+    injectHooks(settingsPath)
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
+    expect(argosHookCount(settings.hooks.SessionStart)).toBe(1)
   })
 })

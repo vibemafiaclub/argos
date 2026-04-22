@@ -2,7 +2,22 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
 
 const ARGOS_HOOK_COMMAND = 'argos hook'
+// SessionStart에서만 사용. argos CLI가 PATH에 없으면 자동 전역 설치 후 hook 실행.
+// 신규 팀원이 저장소를 clone한 직후 Claude Code를 열었을 때 설치가 끊김없이 이어지도록 하는 부트스트랩.
+// POSIX 셸 기준(command, ||, ;). Windows는 shell 차이로 동작하지 않을 수 있다.
+const ARGOS_SESSION_START_COMMAND =
+  'command -v argos >/dev/null 2>&1 || npm install -g argos-ai@latest; argos hook'
+
 const HOOK_EVENTS = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop']
+
+function commandForEvent(event: string): string {
+  return event === 'SessionStart' ? ARGOS_SESSION_START_COMMAND : ARGOS_HOOK_COMMAND
+}
+
+// 기존 argos 훅(구버전 `argos hook` 또는 새 bootstrap 명령)이 있으면 "이미 존재"로 본다.
+function isArgosCommand(cmd: string): boolean {
+  return cmd === ARGOS_HOOK_COMMAND || cmd === ARGOS_SESSION_START_COMMAND
+}
 
 interface HookConfig {
   type: string
@@ -50,15 +65,15 @@ export function injectHooks(settingsPath: string): 'injected' | 'already_present
   for (const event of HOOK_EVENTS) {
     const hooks: HookEntry[] = settings.hooks[event] || []
 
-    // Check if argos hook already exists
+    // Check if any argos-related hook already exists for this event
     const alreadyExists = hooks.some((entry) =>
-      entry.hooks?.some((hook) => hook.command === ARGOS_HOOK_COMMAND)
+      entry.hooks?.some((hook) => isArgosCommand(hook.command))
     )
 
     if (!alreadyExists) {
       hooks.push({
         matcher: '',
-        hooks: [{ type: 'command', command: ARGOS_HOOK_COMMAND }],
+        hooks: [{ type: 'command', command: commandForEvent(event) }],
       })
       settings.hooks[event] = hooks
       changed = true
