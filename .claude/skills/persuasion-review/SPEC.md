@@ -8,9 +8,10 @@ last_updated: 2026-04-22
 
 ## 0. 목적
 
-Argos의 현재 서비스(또는 신규 기능)에 대한 가치제안이 **실제 잠재고객 의사결정 네트워크에서 얼마나 설득력을 갖는지**를, 고객 페르소나 기반 다중 claude headless 세션으로 시뮬레이팅하여 비판적으로 검토한다. 결과를 누적해 향후 실제 고객 피드백과 비교·보정(캘리브레이션)할 기반을 만든다.
+현재 서비스(또는 신규 기능)에 대한 가치제안이 **실제 잠재고객 의사결정 네트워크에서 얼마나 설득력을 갖는지**를, 고객 페르소나 기반 다중 claude headless 세션으로 시뮬레이팅하여 비판적으로 검토한다. 결과를 누적해 향후 실제 고객 피드백과 비교·보정(캘리브레이션)할 기반을 만든다.
 
 핵심 설계 원칙:
+
 - 모든 세션은 **비판적 검토자** 역할. 외부 서비스 도입의 시간/인적 비용, 신뢰도, 가격 리스크를 엄격히 따지며, 기대 효과가 명백히 크지 않으면 쉽게 도입하지 않는다.
 - **신뢰관계 점수**가 핵심 변인. salesman↔keyman, keyman↔stakeholder 간 신뢰도가 세션 판단과 재설득 반복 횟수에 영향.
 - 고객 실명은 저장하지 않는다. 익명 id + 회사 메타(산업/규모/단계)만 사용.
@@ -146,6 +147,7 @@ competing_solutions:
 **"unknown" 처리**: `tech_literacy: unknown`, `trust_with_keyman: unknown` 등. 세션 system prompt에 "이 필드는 unknown이므로 가장 비판적/비관적 가정 하에 판단하라"는 지시를 함께 주입.
 
 **decision_authority의 효과**:
+
 - `full`: keyman이 5c에서 stakeholder drop에도 재설득 경향 강함. 최종 리포트에서 "내부 반발 리스크"는 상대적으로 약하게 표기.
 - `partial`: 중간.
 - `none`: 5c에서 drop 경향 강함. 리포트에 "keyman accept이지만 실제 도입 불확실" 경고 강하게 표기.
@@ -159,16 +161,13 @@ competing_solutions:
 run_id: fintech-startup-cto-01_20260422_153000
 persona_id: fintech-startup-cto-01
 persona_version: 1
-delivery_mode: landing_plus_meeting   # landing_only | landing_plus_meeting
+delivery_mode: landing_plus_meeting # landing_only | landing_plus_meeting
 created_at: 2026-04-22T15:30:00
 ---
-
 # 가치제안 요약
 ...
-
 # 구체적 기능 설명 (미팅 전달 시)
 ...
-
 # 가격/플랜
 ...
 ```
@@ -210,6 +209,7 @@ created_at: 2026-04-22T15:31:12
 **트리거**: `"새 고객 프로파일 만들자"` 및 유사 의도 표현.
 
 단계:
+
 1. 사용자에게 "고객 인터뷰 메모나 자유 서술을 편하게 써달라"고 요청 (자유서술 + 추출 방식).
 2. 사용자가 덩어리 텍스트 입력.
 3. Claude가 스키마에 채운 draft markdown을 생성하여 보여줌. 채우지 못한 필드는 `unknown` 명시.
@@ -225,7 +225,8 @@ created_at: 2026-04-22T15:31:12
 
 ### 3.B 페르소나 수정/조회 플로우
 
-**트리거**: 
+**트리거**:
+
 - 수정: `"고객 프로파일 수정하자"` + 대상 지정
 - 조회: `"고객 프로파일 보여줘"` (목록 또는 특정 id)
 
@@ -238,7 +239,7 @@ created_at: 2026-04-22T15:31:12
 #### 3.C.1 단계 (Claude 대화)
 
 1. **대상 페르소나 선택**: 저장된 페르소나 목록 제시, 복수 선택 가능. 없으면 "새로 만들래?" 제안 (→ 3.A로).
-2. **전달 모드 선택**: 
+2. **전달 모드 선택**:
    - `landing_only`: 랜딩페이지 카피만 전달
    - `landing_plus_meeting`: 랜딩페이지 + 세일즈미팅 or 미디어 컨텐츠 (랜딩에 없는 구체 기능 설명 포함 가능)
 3. **가치제안 문서 작성**: 선택된 전달 모드에 맞춰 Claude가 draft 작성 → 사용자와 티키타카로 컨펌 → `value_proposition.md` 저장.
