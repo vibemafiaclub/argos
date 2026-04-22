@@ -69,6 +69,13 @@ export interface AgentStat {
   sampleDesc?: string | null
 }
 
+/** org-scoped 세션 리스트/디테일에서 사용하는 project 요약 정보 */
+export interface SessionProjectSummary {
+  id: string
+  slug: string
+  name: string
+}
+
 export interface SessionItem {
   id: string
   userId: string
@@ -81,6 +88,8 @@ export interface SessionItem {
   eventCount: number
   /** 저장된 session.title, 없으면 첫 HUMAN 메시지로 fallback (200자 truncation). 완전히 비어있으면 null */
   title: string | null
+  /** org-scoped 응답에서는 반드시 포함. 기존 project-scoped 응답은 미포함(후방호환). */
+  project?: SessionProjectSummary
 }
 
 /** 세션 타임라인 차트용 — UsageRecord 1건에 대응 */

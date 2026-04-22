@@ -16,6 +16,7 @@ export interface Project {
 export interface CreateProjectResponse {
   projectId: string
   orgId: string
+  orgSlug: string
   orgName: string
   projectName: string
   projectSlug: string

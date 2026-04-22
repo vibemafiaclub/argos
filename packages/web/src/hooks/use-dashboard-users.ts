@@ -5,27 +5,38 @@ import { useSession } from 'next-auth/react'
 import { apiGet } from '@/lib/api-client'
 import type { PaginatedResult, UserStat } from '@argos/shared'
 
+interface UseDashboardUsersOptions {
+  projectId?: string
+  from: string
+  to: string
+  page: number
+  pageSize: number
+  sort?: 'name' | 'tokens'
+}
+
 export function useDashboardUsers(
-  projectId: string,
-  from: string,
-  to: string,
-  page: number,
-  pageSize: number,
-  sort?: 'name' | 'tokens',
+  orgSlug: string,
+  { projectId, from, to, page, pageSize, sort }: UseDashboardUsersOptions,
 ) {
   const { data: session } = useSession()
 
   const sortParam = sort === 'tokens' ? '&sort=tokens' : ''
+  const projectParam = projectId ? `&projectId=${projectId}` : ''
 
   return useQuery({
-    queryKey: ['dashboard', 'users', projectId, from, to, page, pageSize, sort ?? 'name'],
+    queryKey: [
+      'dashboard',
+      'users',
+      orgSlug,
+      { projectId, from, to, page, pageSize, sort: sort ?? 'name' },
+    ],
     queryFn: () =>
       apiGet<PaginatedResult<UserStat>>(
-        `/api/projects/${projectId}/dashboard/users?from=${from}&to=${to}&page=${page}&pageSize=${pageSize}${sortParam}`,
+        `/api/orgs/${orgSlug}/dashboard/users?from=${from}&to=${to}&page=${page}&pageSize=${pageSize}${sortParam}${projectParam}`,
         session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!session?.argosToken,
+    enabled: !!session?.argosToken && !!orgSlug,
     placeholderData: keepPreviousData,
   })
 }

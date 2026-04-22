@@ -17,8 +17,8 @@ export interface ExternalDeps {
   }
   api: {
     createProject(name: string, token: string, apiUrl: string): Promise<CreateProjectResponse>
-    joinOrg(orgId: string, token: string, apiUrl: string): Promise<void>
-    ensureMembership(orgId: string, token: string, apiUrl: string): Promise<void>
+    joinOrg(orgSlug: string, token: string, apiUrl: string): Promise<void>
+    ensureMembership(orgSlug: string, token: string, apiUrl: string): Promise<void>
     revokeToken(token: string, apiUrl: string): Promise<void>
   }
   hooks: {

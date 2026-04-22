@@ -361,6 +361,100 @@ async function upsertRollup(projectId: string, date: Date, rollup: DailyRollup):
 // ─── Public: ensure rollups exist for [from, to], return daily rollups ─────
 
 /**
+ * 주어진 project 리스트에 대해 각자 [from, to] 의 rollup을 계산하고
+ * 날짜 단위로 병합해 하나의 `DailyRollup[]` 으로 반환한다.
+ *
+ * 병합 규칙:
+ * - scalar 지표: 합산
+ * - activeUserIds/*Counts/modelTokens/userStats: 합집합/합산
+ *
+ * projectId 전체가 org 에 속하는 경우 orgAccessor 에서 미리 필터링되어 있다고 가정한다.
+ */
+export async function getDailyRollupsForProjects(
+  projectIds: string[],
+  from: Date,
+  to: Date,
+): Promise<DailyRollup[]> {
+  if (projectIds.length === 0) return []
+
+  const perProject = await Promise.all(
+    projectIds.map((pid) => getDailyRollups(pid, from, to)),
+  )
+
+  // date-key 기준으로 병합
+  const byDate = new Map<string, DailyRollup>()
+  for (const rollups of perProject) {
+    for (const r of rollups) {
+      const prev = byDate.get(r.date)
+      if (!prev) {
+        byDate.set(r.date, {
+          date: r.date,
+          sessionCount: r.sessionCount,
+          turnCount: r.turnCount,
+          activeUserCount: 0, // 나중에 union 크기로 재계산
+          activeUserIds: [...r.activeUserIds],
+          inputTokens: r.inputTokens,
+          outputTokens: r.outputTokens,
+          cacheReadTokens: r.cacheReadTokens,
+          cacheCreationTokens: r.cacheCreationTokens,
+          estimatedCostUsd: r.estimatedCostUsd,
+          skillCounts: { ...r.skillCounts },
+          agentCounts: { ...r.agentCounts },
+          modelTokens: { ...r.modelTokens },
+          userStats: r.userStats.map((u) => ({ ...u })),
+        })
+      } else {
+        prev.sessionCount += r.sessionCount
+        prev.turnCount += r.turnCount
+        prev.inputTokens += r.inputTokens
+        prev.outputTokens += r.outputTokens
+        prev.cacheReadTokens += r.cacheReadTokens
+        prev.cacheCreationTokens += r.cacheCreationTokens
+        prev.estimatedCostUsd += r.estimatedCostUsd
+        // activeUserIds: 합집합
+        const userSet = new Set(prev.activeUserIds)
+        for (const u of r.activeUserIds) userSet.add(u)
+        prev.activeUserIds = Array.from(userSet)
+        for (const [k, v] of Object.entries(r.skillCounts)) {
+          prev.skillCounts[k] = (prev.skillCounts[k] ?? 0) + v
+        }
+        for (const [k, v] of Object.entries(r.agentCounts)) {
+          prev.agentCounts[k] = (prev.agentCounts[k] ?? 0) + v
+        }
+        for (const [k, v] of Object.entries(r.modelTokens)) {
+          prev.modelTokens[k] = (prev.modelTokens[k] ?? 0) + v
+        }
+        // userStats: userId 기준 sum
+        const userMap = new Map(prev.userStats.map((u) => [u.userId, u]))
+        for (const u of r.userStats) {
+          const prevU = userMap.get(u.userId)
+          if (!prevU) {
+            userMap.set(u.userId, { ...u })
+          } else {
+            prevU.sessionCount += u.sessionCount
+            prevU.inputTokens += u.inputTokens
+            prevU.outputTokens += u.outputTokens
+            prevU.estimatedCostUsd += u.estimatedCostUsd
+            prevU.skillCalls += u.skillCalls
+            prevU.agentCalls += u.agentCalls
+          }
+        }
+        prev.userStats = Array.from(userMap.values())
+      }
+    }
+  }
+
+  // activeUserCount 재계산
+  for (const r of byDate.values()) {
+    r.activeUserCount = r.activeUserIds.length
+  }
+
+  const result = Array.from(byDate.values())
+  result.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return result
+}
+
+/**
  * [from, to] 범위에 대해 일별 rollup을 반환한다.
  * - 과거 완결된 UTC 날짜: DB 캐시에서 읽고, 없으면 계산 후 upsert
  * - 오늘(UTC 기준): 캐시하지 않고 live 계산

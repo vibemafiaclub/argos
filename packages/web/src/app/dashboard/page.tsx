@@ -1,8 +1,8 @@
 import { auth } from '@/auth'
 import { redirect } from 'next/navigation'
-import { EmptyState } from '@/components/dashboard/empty-state'
+import { NoOrganizationState } from '@/components/dashboard/no-organization-state'
 import { verifyJwt } from '@/lib/server/jwt'
-import { getProjectsForUser } from '@/lib/server/project-actions'
+import { db } from '@/lib/server/db'
 
 export default async function DashboardPage() {
   const session = await auth()
@@ -11,14 +11,18 @@ export default async function DashboardPage() {
     redirect('/login')
   }
 
-  // session.argosToken에서 userId 추출 후 비즈니스 로직 직접 호출
+  // session.argosToken에서 userId 추출 후 사용자의 첫 org 로 redirect
   let redirectTo: string | null = null
   try {
     const payload = await verifyJwt(session.argosToken)
     if (payload) {
-      const projects = await getProjectsForUser(payload.sub)
-      if (projects.length > 0) {
-        redirectTo = `/dashboard/${projects[0].id}`
+      const membership = await db.orgMembership.findFirst({
+        where: { userId: payload.sub },
+        include: { organization: { select: { slug: true } } },
+        orderBy: { createdAt: 'asc' },
+      })
+      if (membership) {
+        redirectTo = `/dashboard/${membership.organization.slug}`
       }
     }
   } catch {
@@ -29,5 +33,5 @@ export default async function DashboardPage() {
     redirect(redirectTo)
   }
 
-  return <EmptyState email={session.user?.email ?? ''} />
+  return <NoOrganizationState email={session.user?.email ?? ''} />
 }

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { UpdateProjectSchema } from '@argos/shared'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
+import { assertProjectAccessOrResponse } from '@/lib/server/dashboard-route-helper'
+import { db } from '@/lib/server/db'
 import {
   getProjectForUser,
   updateProjectForUser,
@@ -78,6 +80,29 @@ export async function PATCH(
     }
 
     return NextResponse.json({ project: result.project })
+  } catch (err) {
+    return handleRouteError(err)
+  }
+}
+
+// DELETE /api/projects/:projectId
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ projectId: string }> }
+) {
+  try {
+    const auth = await requireAuth(req)
+    if (auth instanceof NextResponse) return auth
+    const { userId } = auth
+
+    const { projectId } = await params
+
+    const access = await assertProjectAccessOrResponse(projectId, userId)
+    if (access instanceof NextResponse) return access
+
+    await db.project.delete({ where: { id: projectId } })
+
+    return NextResponse.json({ ok: true })
   } catch (err) {
     return handleRouteError(err)
   }

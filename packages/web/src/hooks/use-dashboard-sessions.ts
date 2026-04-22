@@ -12,60 +12,78 @@ import type { PaginatedResult, SessionItem, SessionDetail } from '@argos/shared'
 
 export type SessionSort = 'recent' | 'cost'
 
+interface UseDashboardSessionsOptions {
+  projectId?: string
+  from: string
+  to: string
+  page: number
+  pageSize: number
+  sort?: SessionSort
+}
+
 export function useDashboardSessions(
-  projectId: string,
-  from: string,
-  to: string,
-  page: number,
-  pageSize: number,
-  sort: SessionSort = 'recent',
+  orgSlug: string,
+  {
+    projectId,
+    from,
+    to,
+    page,
+    pageSize,
+    sort = 'recent',
+  }: UseDashboardSessionsOptions,
 ) {
   const { data: session } = useSession()
 
   const sortParam = sort === 'cost' ? '&sort=cost' : ''
+  const projectParam = projectId ? `&projectId=${projectId}` : ''
 
   return useQuery({
-    queryKey: ['dashboard', 'sessions', projectId, from, to, page, pageSize, sort],
+    queryKey: [
+      'dashboard',
+      'sessions',
+      orgSlug,
+      { projectId, from, to, page, pageSize, sort },
+    ],
     queryFn: () =>
       apiGet<PaginatedResult<SessionItem>>(
-        `/api/projects/${projectId}/dashboard/sessions?from=${from}&to=${to}&page=${page}&pageSize=${pageSize}${sortParam}`,
+        `/api/orgs/${orgSlug}/dashboard/sessions?from=${from}&to=${to}&page=${page}&pageSize=${pageSize}${sortParam}${projectParam}`,
         session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!session?.argosToken,
+    enabled: !!session?.argosToken && !!orgSlug,
     placeholderData: keepPreviousData,
   })
 }
 
-export function useDeleteSession(projectId: string) {
+export function useDeleteSession(orgSlug: string) {
   const { data: session } = useSession()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (sessionId: string) =>
       apiDelete(
-        `/api/projects/${projectId}/dashboard/sessions/${sessionId}`,
+        `/api/orgs/${orgSlug}/dashboard/sessions/${sessionId}`,
         session?.argosToken ?? ''
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ['dashboard', 'sessions', projectId],
+        queryKey: ['dashboard', 'sessions', orgSlug],
       })
     },
   })
 }
 
-export function useSessionDetail(projectId: string, sessionId: string) {
+export function useSessionDetail(orgSlug: string, sessionId: string) {
   const { data: session } = useSession()
 
   return useQuery({
-    queryKey: ['dashboard', 'sessions', projectId, sessionId],
+    queryKey: ['dashboard', 'sessions', orgSlug, sessionId],
     queryFn: () =>
       apiGet<SessionDetail>(
-        `/api/projects/${projectId}/dashboard/sessions/${sessionId}`,
+        `/api/orgs/${orgSlug}/dashboard/sessions/${sessionId}`,
         session?.argosToken ?? ''
       ),
     staleTime: 30_000,
-    enabled: !!session?.argosToken && !!sessionId,
+    enabled: !!session?.argosToken && !!orgSlug && !!sessionId,
   })
 }

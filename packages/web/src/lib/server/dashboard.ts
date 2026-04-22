@@ -1,7 +1,66 @@
+import type { Organization, OrgRole } from '@prisma/client'
 import { db } from './db'
 
 interface ProjectAccessResult {
   orgId: string
+}
+
+export type OrgAccessResult =
+  | { kind: 'ok'; org: Organization; role: OrgRole }
+  | { kind: 'not-found' }
+  | { kind: 'forbidden' }
+
+/**
+ * org 멤버십 확인 (orgId 기반)
+ */
+export async function assertOrgAccess(
+  orgId: string,
+  userId: string
+): Promise<OrgAccessResult> {
+  const org = await db.organization.findUnique({
+    where: { id: orgId },
+    include: {
+      memberships: {
+        where: { userId },
+        select: { role: true },
+        take: 1,
+      },
+    },
+  })
+
+  if (!org) {
+    return { kind: 'not-found' }
+  }
+
+  if (org.memberships.length === 0) {
+    return { kind: 'forbidden' }
+  }
+
+  const { memberships, ...orgWithoutMemberships } = org
+  return {
+    kind: 'ok',
+    org: orgWithoutMemberships as Organization,
+    role: memberships[0].role,
+  }
+}
+
+/**
+ * org 멤버십 확인 (slug 기반)
+ */
+export async function assertOrgAccessBySlug(
+  orgSlug: string,
+  userId: string
+): Promise<OrgAccessResult> {
+  const org = await db.organization.findUnique({
+    where: { slug: orgSlug },
+    select: { id: true },
+  })
+
+  if (!org) {
+    return { kind: 'not-found' }
+  }
+
+  return assertOrgAccess(org.id, userId)
 }
 
 /**

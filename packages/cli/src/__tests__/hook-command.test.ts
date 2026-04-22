@@ -107,6 +107,7 @@ describe('buildPayload', () => {
 const MOCK_PROJECT = {
   projectId: 'proj-1',
   orgId: 'org-1',
+  orgSlug: 'test-org',
   orgName: 'Test Org',
   projectName: 'Test Project',
   apiUrl: 'https://api.example.com',

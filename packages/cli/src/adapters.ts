@@ -25,22 +25,44 @@ export const realDeps: ExternalDeps = {
   },
   api: {
     async createProject(name: string, token: string, apiUrl: string): Promise<CreateProjectResponse> {
-      return apiRequest<CreateProjectResponse>(`${apiUrl}/api/projects`, {
+      const orgsRes = await apiRequest<{ orgs: Array<{ id: string; name: string; slug: string; role: string }> }>(
+        `${apiUrl}/api/orgs`,
+        { method: 'GET', token, baseUrl: '' }
+      )
+
+      if (!orgsRes.orgs || orgsRes.orgs.length === 0) {
+        throw new Error('소속된 조직이 없습니다. 먼저 조직을 생성하세요.')
+      }
+
+      const org = orgsRes.orgs[0]
+
+      const createRes = await apiRequest<{
+        project: { id: string; orgId: string; slug: string; name: string }
+      }>(`${apiUrl}/api/orgs/${org.slug}/projects`, {
         method: 'POST',
         body: JSON.stringify({ name }),
         token,
         baseUrl: '',
       })
+
+      return {
+        projectId: createRes.project.id,
+        orgId: createRes.project.orgId,
+        orgSlug: org.slug,
+        orgName: org.name,
+        projectName: createRes.project.name,
+        projectSlug: createRes.project.slug,
+      }
     },
-    async joinOrg(orgId: string, token: string, apiUrl: string): Promise<void> {
-      await apiRequest(`${apiUrl}/api/orgs/${orgId}/members`, {
+    async joinOrg(orgSlug: string, token: string, apiUrl: string): Promise<void> {
+      await apiRequest(`${apiUrl}/api/orgs/${orgSlug}/members`, {
         method: 'POST',
         token,
         baseUrl: '',
       })
     },
-    async ensureMembership(orgId: string, token: string, apiUrl: string): Promise<void> {
-      await apiRequest(`${apiUrl}/api/orgs/${orgId}/members`, {
+    async ensureMembership(orgSlug: string, token: string, apiUrl: string): Promise<void> {
+      await apiRequest(`${apiUrl}/api/orgs/${orgSlug}/members`, {
         method: 'POST',
         token,
         baseUrl: '',

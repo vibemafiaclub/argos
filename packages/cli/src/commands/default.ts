@@ -1,7 +1,7 @@
 import { join } from 'path'
 import chalk from 'chalk'
 import ora from 'ora'
-import type { Config } from '../lib/config.js'
+import { DEFAULT_API_URL, normalizeApiUrl, type Config } from '../lib/config.js'
 import type { ProjectConfig } from '../lib/project.js'
 import type { CreateProjectResponse } from '@argos/shared'
 import type { ExternalDeps, CommandFactory } from '../deps.js'
@@ -10,21 +10,22 @@ interface DefaultCommandOptions {
   apiUrl?: string
 }
 
-const DEFAULT_API_URL = 'https://argos-ai.xyz'
-
 export const makeDefaultCommand: CommandFactory<DefaultCommandOptions> =
   (deps) => async (options) => {
     const config = deps.config.read()
     const project = deps.project.find()
-    const apiUrl = options.apiUrl || DEFAULT_API_URL
+    // customApiUrl is undefined unless the user passed a real self-hosted URL.
+    // When undefined, the field is omitted from newly-written configs so they
+    // track DEFAULT_API_URL automatically.
+    const customApiUrl = normalizeApiUrl(options.apiUrl)
 
     // 4-way branch based on config and project presence
     if (!config && !project) {
-      await runFullSetup(deps, apiUrl)
+      await runFullSetup(deps, customApiUrl)
     } else if (!config && project) {
-      await runLoginAndJoin(deps, project, apiUrl)
+      await runLoginAndJoin(deps, project, customApiUrl)
     } else if (config && !project) {
-      await runProjectInit(deps, config, apiUrl)
+      await runProjectInit(deps, config, customApiUrl)
     } else if (config && project) {
       await ensureOrgMembershipAndShowStatus(deps, config, project)
     }
@@ -33,16 +34,18 @@ export const makeDefaultCommand: CommandFactory<DefaultCommandOptions> =
 /**
  * Flow 1: Full setup (login + create project + inject hooks)
  */
-async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
+async function runFullSetup(deps: ExternalDeps, customApiUrl: string | undefined): Promise<void> {
   console.log(chalk.bold('Argos 초기 설정'))
   console.log()
+
+  const effectiveApiUrl = customApiUrl ?? DEFAULT_API_URL
 
   // Step 1: Login
   console.log('→ 로그인')
 
   let loginResponse
   try {
-    loginResponse = await deps.auth.login(apiUrl)
+    loginResponse = await deps.auth.login(effectiveApiUrl)
     console.log(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
   } catch (err) {
     console.error(chalk.red('✗ 로그인 실패'))
@@ -50,12 +53,12 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
     process.exit(1)
   }
 
-  // Save config
+  // Save config — omit apiUrl unless user provided a self-hosted override
   deps.config.write({
     token: loginResponse.token,
-    apiUrl,
     userId: loginResponse.user.id,
     email: loginResponse.user.email,
+    ...(customApiUrl && { apiUrl: customApiUrl }),
   })
 
   // Step 2: Create project
@@ -69,7 +72,7 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
 
   let projectResponse: CreateProjectResponse
   try {
-    projectResponse = await deps.api.createProject(projectName, loginResponse.token, apiUrl)
+    projectResponse = await deps.api.createProject(projectName, loginResponse.token, effectiveApiUrl)
     spinner.succeed(chalk.green(`✓ 프로젝트 생성: ${projectResponse.projectName}`))
     console.log(`  조직: ${projectResponse.orgName}`)
   } catch (err) {
@@ -82,9 +85,10 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
   deps.project.write({
     projectId: projectResponse.projectId,
     orgId: projectResponse.orgId,
+    orgSlug: projectResponse.orgSlug,
     orgName: projectResponse.orgName,
     projectName: projectResponse.projectName,
-    apiUrl,
+    ...(customApiUrl && { apiUrl: customApiUrl }),
   })
   console.log(chalk.green('✓ .argos/project.json 작성'))
 
@@ -111,14 +115,17 @@ async function runFullSetup(deps: ExternalDeps, apiUrl: string): Promise<void> {
 /**
  * Flow 2: Login and join existing org (project.json exists, but not logged in)
  */
-async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUrl: string): Promise<void> {
+async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, customApiUrl: string | undefined): Promise<void> {
   console.log(chalk.bold('Argos 로그인'))
   console.log(`프로젝트: ${project.projectName}`)
   console.log()
 
+  const inheritedApiUrl = customApiUrl ?? project.apiUrl
+  const effectiveApiUrl = inheritedApiUrl ?? DEFAULT_API_URL
+
   let loginResponse
   try {
-    loginResponse = await deps.auth.login(project.apiUrl || apiUrl)
+    loginResponse = await deps.auth.login(effectiveApiUrl)
     console.log(chalk.green(`✓ 로그인 완료 (${loginResponse.user.email})`))
   } catch (err) {
     console.error(chalk.red('✗ 로그인 실패'))
@@ -126,18 +133,18 @@ async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUr
     process.exit(1)
   }
 
-  // Save config
+  // Save config — inherit project's override if present, otherwise omit to track default
   deps.config.write({
     token: loginResponse.token,
-    apiUrl: project.apiUrl || apiUrl,
     userId: loginResponse.user.id,
     email: loginResponse.user.email,
+    ...(inheritedApiUrl && { apiUrl: inheritedApiUrl }),
   })
 
   // Join org
   const spinner = ora('조직 합류 중...').start()
   try {
-    await deps.api.joinOrg(project.orgId, loginResponse.token, project.apiUrl || apiUrl)
+    await deps.api.joinOrg(project.orgSlug, loginResponse.token, effectiveApiUrl)
     spinner.succeed(chalk.green(`✓ 조직 합류: ${project.orgName}`))
   } catch (err) {
     spinner.fail(chalk.red('✗ 조직 합류 실패'))
@@ -154,10 +161,13 @@ async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, apiUr
 /**
  * Flow 3: Create project (already logged in, but no project.json)
  */
-async function runProjectInit(deps: ExternalDeps, config: Config, apiUrl: string): Promise<void> {
+async function runProjectInit(deps: ExternalDeps, config: Config, customApiUrl: string | undefined): Promise<void> {
   console.log(chalk.green(`✓ 로그인됨: ${config.email}`))
   console.log('→ 이 디렉토리는 아직 Argos 프로젝트가 아닙니다.')
   console.log()
+
+  const inheritedApiUrl = customApiUrl ?? config.apiUrl
+  const effectiveApiUrl = inheritedApiUrl ?? DEFAULT_API_URL
 
   const currentDirName = deps.cwd().split('/').pop() || 'my-project'
   const projectName = await deps.prompt.input('프로젝트 이름을 입력하세요:', currentDirName)
@@ -166,7 +176,7 @@ async function runProjectInit(deps: ExternalDeps, config: Config, apiUrl: string
 
   let projectResponse: CreateProjectResponse
   try {
-    projectResponse = await deps.api.createProject(projectName, config.token, config.apiUrl || apiUrl)
+    projectResponse = await deps.api.createProject(projectName, config.token, effectiveApiUrl)
     spinner.succeed(chalk.green(`✓ 프로젝트 생성: ${projectResponse.projectName}`))
     console.log(`  조직: ${projectResponse.orgName}`)
   } catch (err) {
@@ -175,13 +185,14 @@ async function runProjectInit(deps: ExternalDeps, config: Config, apiUrl: string
     process.exit(1)
   }
 
-  // Write project config
+  // Write project config — inherit user's override if present, otherwise omit
   deps.project.write({
     projectId: projectResponse.projectId,
     orgId: projectResponse.orgId,
+    orgSlug: projectResponse.orgSlug,
     orgName: projectResponse.orgName,
     projectName: projectResponse.projectName,
-    apiUrl: config.apiUrl || apiUrl,
+    ...(inheritedApiUrl && { apiUrl: inheritedApiUrl }),
   })
   console.log(chalk.green('✓ .argos/project.json 작성'))
 
@@ -210,7 +221,7 @@ async function ensureOrgMembershipAndShowStatus(
   const spinner = ora('멤버십 확인 중...').start()
 
   try {
-    await deps.api.ensureMembership(project.orgId, config.token, project.apiUrl || config.apiUrl)
+    await deps.api.ensureMembership(project.orgSlug, config.token, project.apiUrl ?? config.apiUrl ?? DEFAULT_API_URL)
     spinner.stop()
   } catch {
     spinner.stop()
@@ -223,7 +234,7 @@ async function ensureOrgMembershipAndShowStatus(
   console.log('사용자:  ' + config.email)
   console.log('프로젝트:' + ` ${project.projectName} (${project.projectId})`)
   console.log('조직:    ' + project.orgName)
-  console.log('API:     ' + (project.apiUrl || config.apiUrl))
+  console.log('API:     ' + (project.apiUrl ?? config.apiUrl ?? DEFAULT_API_URL))
 
   // Check hooks
   const settingsPath = join(deps.cwd(), '.claude', 'settings.json')

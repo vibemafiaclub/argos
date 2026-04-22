@@ -1,12 +1,14 @@
 import { dirname, join } from 'path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { normalizeApiUrl } from './config.js'
 
 export interface ProjectConfig {
   projectId: string
   orgId: string
+  orgSlug: string
   orgName: string
   projectName: string
-  apiUrl: string
+  apiUrl?: string
 }
 
 /**
@@ -24,7 +26,14 @@ export function findProjectConfig(startDir?: string): ProjectConfig | null {
     if (existsSync(configPath)) {
       try {
         const content = readFileSync(configPath, 'utf8')
-        return JSON.parse(content) as ProjectConfig
+        const parsed = JSON.parse(content) as ProjectConfig
+        const normalized = normalizeApiUrl(parsed.apiUrl)
+        if (normalized) {
+          parsed.apiUrl = normalized
+        } else {
+          delete parsed.apiUrl
+        }
+        return parsed
       } catch {
         return null
       }

@@ -6,20 +6,23 @@ import { apiGet } from '@/lib/api-client'
 
 interface Project {
   id: string
-  orgId: string
-  orgName: string
-  name: string
   slug: string
+  name: string
+  createdAt: string
+  updatedAt: string
 }
 
-export function useProjects() {
+export function useProjects(orgSlug: string) {
   const { data: session } = useSession()
 
   return useQuery({
-    queryKey: ['projects'],
+    queryKey: ['projects', orgSlug],
     queryFn: () =>
-      apiGet<{ projects: Project[] }>('/api/projects', session?.argosToken ?? ''),
+      apiGet<{ projects: Project[] }>(
+        `/api/orgs/${orgSlug}/projects`,
+        session?.argosToken ?? ''
+      ),
     staleTime: 60_000,
-    enabled: !!session?.argosToken,
+    enabled: !!session?.argosToken && !!orgSlug,
   })
 }

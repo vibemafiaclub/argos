@@ -6,7 +6,8 @@ import { useSession } from 'next-auth/react'
 import { apiPatch } from '@/lib/api-client'
 
 interface UpdateProjectInput {
-  name: string
+  name?: string
+  slug?: string
 }
 
 interface UpdateProjectResponse {
@@ -33,6 +34,7 @@ export function useUpdateProject(projectId: string) {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] })
       router.refresh()
     },
   })

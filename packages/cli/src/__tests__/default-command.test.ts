@@ -12,6 +12,7 @@ const MOCK_CONFIG = {
 const MOCK_PROJECT = {
   projectId: 'proj-1',
   orgId: 'org-1',
+  orgSlug: 'test-org',
   orgName: 'Test Org',
   projectName: 'test-project',
   apiUrl: 'https://api.example.com',
@@ -25,8 +26,10 @@ const MOCK_LOGIN_RESPONSE = {
 const MOCK_CREATE_PROJECT_RESPONSE = {
   projectId: 'proj-1',
   orgId: 'org-1',
+  orgSlug: 'test-org',
   orgName: 'Test Org',
   projectName: 'test-project',
+  projectSlug: 'test-project',
 }
 
 function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
@@ -135,14 +138,14 @@ describe('makeDefaultCommand', () => {
       expect(deps.auth.login).toHaveBeenCalled()
     })
 
-    it('deps.api.joinOrg 이 project.orgId 인자와 함께 호출된다', async () => {
+    it('deps.api.joinOrg 이 project.orgSlug 인자와 함께 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
         project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.api.joinOrg).toHaveBeenCalledWith(
-        MOCK_PROJECT.orgId,
+        MOCK_PROJECT.orgSlug,
         expect.any(String),
         expect.any(String)
       )
