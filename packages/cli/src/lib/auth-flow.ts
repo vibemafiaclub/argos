@@ -1,5 +1,4 @@
 import { exec } from 'child_process'
-import { createInterface } from 'readline'
 import chalk from 'chalk'
 import ora from 'ora'
 import type { User, LoginResponse } from '@argos/shared'
@@ -13,20 +12,10 @@ function openBrowser(url: string): void {
   exec(`${cmd} "${url}"`)
 }
 
-function waitForEnter(prompt: string): Promise<void> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout })
-    rl.question(prompt, () => {
-      rl.close()
-      resolve()
-    })
-  })
-}
-
 /**
  * 브라우저 기반 CLI 인증 흐름
  * 1. API에서 state 토큰 발급
- * 2. Enter 입력 시 브라우저 열기
+ * 2. 브라우저 즉시 열기
  * 3. 사용자가 웹에서 허용하면 토큰 수신
  */
 export async function runLoginFlow(apiUrl: string): Promise<LoginResponse> {
@@ -43,16 +32,13 @@ export async function runLoginFlow(apiUrl: string): Promise<LoginResponse> {
     throw new Error(`인증 요청 실패: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  // Step 2: Enter 대기
-  console.log()
-  await waitForEnter('Enter를 눌러 브라우저에서 로그인하세요... ')
-
-  // Step 3: 브라우저 열기
+  // Step 2: 브라우저 즉시 열기
   openBrowser(authUrl)
-  console.log(`브라우저 열기: ${authUrl}`)
+  console.log()
+  console.log(`브라우저에서 허용해 주세요: ${authUrl}`)
   console.log()
 
-  // Step 4: 승인 polling
+  // Step 3: 승인 polling
   const spinner = ora('브라우저 로그인 대기 중...').start()
 
   const token = await new Promise<string>((resolve, reject) => {

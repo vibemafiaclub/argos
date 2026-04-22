@@ -65,8 +65,7 @@ async function runFullSetup(deps: ExternalDeps, customApiUrl: string | undefined
   console.log()
   console.log('→ 프로젝트 생성')
 
-  const currentDirName = deps.cwd().split('/').pop() || 'my-project'
-  const projectName = await deps.prompt.input('프로젝트 이름을 입력하세요:', currentDirName)
+  const projectName = deps.cwd().split('/').pop() || 'my-project'
 
   const spinner = ora('프로젝트 생성 중...').start()
 
@@ -169,8 +168,7 @@ async function runProjectInit(deps: ExternalDeps, config: Config, customApiUrl: 
   const inheritedApiUrl = customApiUrl ?? config.apiUrl
   const effectiveApiUrl = inheritedApiUrl ?? DEFAULT_API_URL
 
-  const currentDirName = deps.cwd().split('/').pop() || 'my-project'
-  const projectName = await deps.prompt.input('프로젝트 이름을 입력하세요:', currentDirName)
+  const projectName = deps.cwd().split('/').pop() || 'my-project'
 
   const spinner = ora('프로젝트 생성 중...').start()
 
