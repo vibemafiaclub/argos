@@ -22,6 +22,7 @@ type NavItem = {
 const topNavItems: NavItem[] = [
   { label: 'Home', href: '', viewerSafe: true },
   { label: 'Overview', href: '/overview', viewerSafe: true },
+  { label: 'Reports', href: '/reports', viewerSafe: false },
   { label: 'Sessions', href: '/sessions', viewerSafe: false },
   { label: 'Users', href: '/users', viewerSafe: false },
   { label: 'Agents', href: '/agents', viewerSafe: true },
