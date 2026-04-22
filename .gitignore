@@ -11,3 +11,5 @@ backups/
 *.dump
 *.sql.gz
 persuasion-data/runs/
+__pycache__/
+*.pyc
