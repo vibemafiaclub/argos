@@ -1,0 +1,11 @@
+{
+  "project": "argos",
+  "task": "metrics-methodology",
+  "prompt": "iterations/3-20260424_152703/requirement.md 에 따라 Skills/Agents 대시보드에 Active users + 대체 지표(medianDurationMs) 컬럼을 추가하고, 각 지표의 공학적 정의를 드러내는 /docs/metrics-methodology 정적 페이지를 신설한다. 프로덕션 DB 사전조사 결과 Claude Code hook이 Skill/Agent 도구에 대해 PostToolUse/exit_code를 공급하지 않음이 확인되어 원안의 successRate는 대체 지표로 전환한다.",
+  "totalPhases": 2,
+  "created_at": "2026-04-24T15:49:40+09:00",
+  "phases": [
+    { "phase": 0, "name": "docs", "status": "pending" },
+    { "phase": 1, "name": "impl", "status": "pending" }
+  ]
+}
