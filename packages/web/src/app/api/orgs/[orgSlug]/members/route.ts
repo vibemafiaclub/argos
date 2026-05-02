@@ -67,10 +67,18 @@ export async function POST(
 
     const { orgSlug } = await params
 
-    const org = await db.organization.findUnique({
+    // CLI 는 v0.1.13 미만에서 만들어진 project.json 에 orgSlug 가 없을 때
+    // 같은 위치에 orgId 를 그대로 넣어 호출한다. slug 우선, 실패 시 id 로 조회.
+    let org = await db.organization.findUnique({
       where: { slug: orgSlug },
       select: { id: true },
     })
+    if (!org) {
+      org = await db.organization.findUnique({
+        where: { id: orgSlug },
+        select: { id: true },
+      })
+    }
 
     if (!org) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 404 })

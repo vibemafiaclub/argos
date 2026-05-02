@@ -140,10 +140,11 @@ async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, custo
     ...(inheritedApiUrl && { apiUrl: inheritedApiUrl }),
   })
 
-  // Join org
+  // Join org. Legacy project.json may lack orgSlug — fall back to orgId.
+  const orgIdentifier = project.orgSlug ?? project.orgId
   const spinner = ora('조직 합류 중...').start()
   try {
-    await deps.api.joinOrg(project.orgSlug, loginResponse.token, effectiveApiUrl)
+    await deps.api.joinOrg(orgIdentifier, loginResponse.token, effectiveApiUrl)
     spinner.succeed(chalk.green(`✓ 조직 합류: ${project.orgName}`))
   } catch (err) {
     spinner.fail(chalk.red('✗ 조직 합류 실패'))
@@ -219,7 +220,7 @@ async function ensureOrgMembershipAndShowStatus(
   const spinner = ora('멤버십 확인 중...').start()
 
   try {
-    await deps.api.ensureMembership(project.orgSlug, config.token, project.apiUrl ?? config.apiUrl ?? DEFAULT_API_URL)
+    await deps.api.ensureMembership(project.orgSlug ?? project.orgId, config.token, project.apiUrl ?? config.apiUrl ?? DEFAULT_API_URL)
     spinner.stop()
   } catch {
     spinner.stop()

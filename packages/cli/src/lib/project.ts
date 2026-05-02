@@ -5,7 +5,9 @@ import { normalizeApiUrl } from './config.js'
 export interface ProjectConfig {
   projectId: string
   orgId: string
-  orgSlug: string
+  // v0.1.13 미만에서 만들어진 project.json 에는 orgSlug 가 없을 수 있다.
+  // 누락 시 CLI 는 orgId 로 대체해 서버를 호출한다.
+  orgSlug?: string
   orgName: string
   projectName: string
   apiUrl?: string

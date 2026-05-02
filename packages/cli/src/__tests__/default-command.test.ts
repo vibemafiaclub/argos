@@ -169,6 +169,20 @@ describe('makeDefaultCommand', () => {
       await makeDefaultCommand(deps)({})
       expect(deps.api.createProject).not.toHaveBeenCalled()
     })
+
+    it('orgSlug 누락된 legacy project.json 에서는 orgId 로 joinOrg 가 호출된다', async () => {
+      const legacyProject = { ...MOCK_PROJECT, orgSlug: undefined } as unknown as typeof MOCK_PROJECT
+      const deps = makeMockDeps({
+        config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(legacyProject), write: vi.fn() },
+      })
+      await makeDefaultCommand(deps)({})
+      expect(deps.api.joinOrg).toHaveBeenCalledWith(
+        MOCK_PROJECT.orgId,
+        expect.any(String),
+        expect.any(String)
+      )
+    })
   })
 
   describe('Flow 3: config 있음 + project 없음 → Project Init', () => {
@@ -214,6 +228,19 @@ describe('makeDefaultCommand', () => {
       const deps = makeMockDeps()
       await makeDefaultCommand(deps)({})
       expect(deps.api.ensureMembership).toHaveBeenCalled()
+    })
+
+    it('orgSlug 누락된 legacy project.json 에서는 orgId 로 ensureMembership 이 호출된다', async () => {
+      const legacyProject = { ...MOCK_PROJECT, orgSlug: undefined } as unknown as typeof MOCK_PROJECT
+      const deps = makeMockDeps({
+        project: { find: vi.fn().mockReturnValue(legacyProject), write: vi.fn() },
+      })
+      await makeDefaultCommand(deps)({})
+      expect(deps.api.ensureMembership).toHaveBeenCalledWith(
+        MOCK_PROJECT.orgId,
+        expect.any(String),
+        expect.any(String)
+      )
     })
 
     it('deps.auth.login 이 호출되지 않는다', async () => {
