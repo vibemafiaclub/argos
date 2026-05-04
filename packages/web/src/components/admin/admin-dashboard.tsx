@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Copy, Link2, LogOut, Search } from 'lucide-react'
+import { Copy, Link2, LogIn, LogOut, Search } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -37,6 +37,7 @@ export function AdminDashboard() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [loadingUsers, setLoadingUsers] = useState(true)
   const [creatingLink, setCreatingLink] = useState(false)
+  const [openingDashboard, setOpeningDashboard] = useState(false)
   const [resetLink, setResetLink] = useState<ResetLink | null>(null)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
@@ -113,6 +114,32 @@ export function AdminDashboard() {
       setError('Unable to create reset link')
     } finally {
       setCreatingLink(false)
+    }
+  }
+
+  async function handleOpenDashboardAsUser() {
+    if (!selectedUserId) return
+
+    setOpeningDashboard(true)
+    setError('')
+
+    try {
+      const res = await fetch('/api/admin/impersonation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: selectedUserId }),
+      })
+      if (!res.ok) {
+        setError('Unable to open dashboard as selected user')
+        return
+      }
+
+      const data = (await res.json()) as { impersonationUrl: string }
+      window.location.assign(data.impersonationUrl)
+    } catch {
+      setError('Unable to open dashboard as selected user')
+    } finally {
+      setOpeningDashboard(false)
     }
   }
 
@@ -227,6 +254,16 @@ export function AdminDashboard() {
                   </div>
 
                   <Button
+                    className="w-full"
+                    onClick={handleOpenDashboardAsUser}
+                    disabled={openingDashboard}
+                  >
+                    <LogIn className="size-4" aria-hidden="true" />
+                    {openingDashboard ? 'Opening...' : 'Open dashboard as user'}
+                  </Button>
+
+                  <Button
+                    variant="outline"
                     className="w-full"
                     onClick={handleCreateLink}
                     disabled={creatingLink}

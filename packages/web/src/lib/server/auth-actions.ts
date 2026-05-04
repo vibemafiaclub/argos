@@ -20,6 +20,30 @@ export interface AuthResult {
   user: AuthResultUser
 }
 
+async function issueAuthResultForUser(user: AuthResultUser): Promise<AuthResult> {
+  const token = await signJwt(user.id)
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+
+  await db.cliToken.create({
+    data: {
+      userId: user.id,
+      tokenHash,
+    },
+  })
+
+  return { token, user }
+}
+
+export async function issueUserAuthResult(userId: string): Promise<AuthResult | null> {
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, name: true, createdAt: true },
+  })
+  if (!user) return null
+
+  return issueAuthResultForUser(user)
+}
+
 /**
  * 로그인 비즈니스 로직.
  * 자격 증명이 유효하면 새 JWT를 발급하고 CliToken을 생성한 뒤 반환한다.
@@ -37,25 +61,12 @@ export async function loginUser(input: {
   const valid = await bcrypt.compare(password, user.passwordHash)
   if (!valid) return null
 
-  const token = await signJwt(user.id)
-  const tokenHash = createHash('sha256').update(token).digest('hex')
-
-  await db.cliToken.create({
-    data: {
-      userId: user.id,
-      tokenHash,
-    },
+  return issueAuthResultForUser({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    createdAt: user.createdAt,
   })
-
-  return {
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      createdAt: user.createdAt,
-    },
-  }
 }
 
 /**
@@ -94,19 +105,12 @@ export async function exchangeOnboardToken(
   // updateMany의 count=0이면 동시 요청이 먼저 소비했다는 뜻
   if (updated.count === 0) return 'ALREADY_USED'
 
-  const jwt = await signJwt(record.userId)
-  const tokenHash = createHash('sha256').update(jwt).digest('hex')
-  await db.cliToken.create({ data: { userId: record.userId, tokenHash } })
-
-  return {
-    token: jwt,
-    user: {
-      id: record.user.id,
-      email: record.user.email,
-      name: record.user.name,
-      createdAt: record.user.createdAt,
-    },
-  }
+  return issueAuthResultForUser({
+    id: record.user.id,
+    email: record.user.email,
+    name: record.user.name,
+    createdAt: record.user.createdAt,
+  })
 }
 
 /**
@@ -129,23 +133,10 @@ export async function registerUser(input: {
     data: { email, passwordHash, name },
   })
 
-  const token = await signJwt(user.id)
-  const tokenHash = createHash('sha256').update(token).digest('hex')
-
-  await db.cliToken.create({
-    data: {
-      userId: user.id,
-      tokenHash,
-    },
+  return issueAuthResultForUser({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    createdAt: user.createdAt,
   })
-
-  return {
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      createdAt: user.createdAt,
-    },
-  }
 }
