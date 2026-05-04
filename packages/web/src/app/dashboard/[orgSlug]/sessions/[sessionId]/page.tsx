@@ -2,6 +2,7 @@
 
 import { use, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Check, Copy } from 'lucide-react'
 import { EventList } from '@/components/dashboard/event-list'
 import { EventDetail } from '@/components/dashboard/event-detail'
 import { SessionTimelineChart } from '@/components/dashboard/session-timeline-chart'
@@ -53,6 +54,11 @@ export default function OrgSessionDetailPage({
   const selectedEvent = safeIdx !== null ? events[safeIdx] ?? null : null
   const [tab, setTab] = useState<'transcript' | 'files' | 'debug'>('transcript')
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set())
+  const [debugCopied, setDebugCopied] = useState(false)
+  const debugJson = useMemo(
+    () => (data ? JSON.stringify(data, null, 2) : ''),
+    [data],
+  )
 
   const toggleGroup = (firstIdx: number) => {
     setExpandedGroups((prev) => {
@@ -66,6 +72,18 @@ export default function OrgSessionDetailPage({
   const jumpToEvent = (idx: number) => {
     setSelectedIdx(idx)
     setTab('transcript')
+  }
+
+  const copyDebugJson = async () => {
+    if (!debugJson) return
+
+    try {
+      await navigator.clipboard.writeText(debugJson)
+      setDebugCopied(true)
+      setTimeout(() => setDebugCopied(false), 2000)
+    } catch {
+      // Clipboard API unavailable or blocked.
+    }
   }
 
   if (isLoading) {
@@ -242,9 +260,26 @@ export default function OrgSessionDetailPage({
                   sessionStartedAt={data.startedAt}
                 />
               </div>
-              <pre className="text-xs bg-muted/40 text-muted-foreground rounded-md p-4 overflow-auto whitespace-pre">
-                {JSON.stringify(data, null, 2)}
-              </pre>
+              <div className="relative">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  className="absolute right-2 top-2 z-10 bg-background/90"
+                  aria-label={debugCopied ? 'JSON copied' : 'Copy JSON'}
+                  title={debugCopied ? 'Copied' : 'Copy JSON'}
+                  onClick={copyDebugJson}
+                >
+                  {debugCopied ? (
+                    <Check className="size-4" aria-hidden="true" />
+                  ) : (
+                    <Copy className="size-4" aria-hidden="true" />
+                  )}
+                </Button>
+                <pre className="text-xs bg-muted/40 text-muted-foreground rounded-md p-4 pt-12 overflow-auto whitespace-pre">
+                  {debugJson}
+                </pre>
+              </div>
             </div>
           </TabsContent>
         </Tabs>
