@@ -49,10 +49,10 @@ export function NoOrganizationState({
         <div className="space-y-3">
           <div className="space-y-1">
             <h2 className="text-lg font-medium">
-              Claude Code에 붙여넣기만 하세요
+              새 프로젝트를 Claude Code에 연결하세요
             </h2>
             <p className="text-sm text-muted-foreground">
-              아래 프롬프트를 복사해 설정할 프로젝트 폴더의 Claude Code 세션에
+              아래 프롬프트를 복사해 새로 추적할 프로젝트 폴더의 Claude Code 세션에
               붙여넣으면, Argos가 조직·프로젝트·hook 설치까지 자동으로 끝냅니다.
             </p>
           </div>
@@ -70,9 +70,9 @@ export function NoOrganizationState({
           </div>
 
           <p className="text-xs text-muted-foreground">
-            팀원은 저장소를 clone하고 Claude Code를 여는 순간 CLI가 자동
-            설치됩니다. 첫 세션에서 <code className="text-foreground">argos</code>
-            를 한 번 실행해 팀에 합류합니다.
+            이미 .argos/project.json 이 커밋된 저장소에 합류하는 팀원은 token 없이
+            repo 루트에서 <code className="text-foreground">argos</code> 만 실행하면
+            팀에 합류합니다.
           </p>
         </div>
 

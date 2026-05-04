@@ -1,6 +1,6 @@
 {
   "name": "argos-ai",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "type": "module",
   "bin": {
     "argos": "./dist/index.js"

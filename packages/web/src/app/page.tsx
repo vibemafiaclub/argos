@@ -289,14 +289,14 @@ export default async function Home() {
               />
               <InstallStep
                 n={2}
-                label="Claude Code에 붙여넣기"
-                body="발급된 프롬프트를 복사해 프로젝트 루트의 Claude Code 세션에 붙여넣으면 CLI 설치 · 조직 · 프로젝트 · hook 설치가 자동 진행됩니다."
+                label="새 프로젝트 최초 연결"
+                body="발급된 프롬프트를 복사해 새로 추적할 프로젝트 루트의 Claude Code 세션에 붙여넣으면 CLI 설치 · 조직 · 프로젝트 · hook 설치가 자동 진행됩니다."
                 preview={`npm install -g argos-ai@latest && argos setup --token=argos_onb_•••`}
               />
               <InstallStep
                 n={3}
                 label="팀원 자동 합류"
-                body="저장소에 .argos/project.json 과 .claude/settings.json 을 커밋하면, 팀원은 clone 후 Claude Code를 여는 순간 CLI가 자동 설치됩니다. 첫 세션에서 argos 한 번만 실행하면 팀에 합류합니다."
+                body="저장소에 .argos/project.json 과 .claude/settings.json 을 커밋하면, 팀원은 clone 후 repo 루트에서 argos 한 번만 실행해 기존 프로젝트에 합류합니다."
               />
             </CardContent>
           </Card>
@@ -401,8 +401,8 @@ export default async function Home() {
                 Claude Code 사용 패턴을 파악하고, 개선하세요.
               </h2>
               <p className="text-sm text-muted-foreground max-w-xl mx-auto">
-                가입하고, Claude Code에 프롬프트 하나 붙여넣으세요. 팀원은 저장소만
-                clone하면 자동 세팅됩니다.
+                새 프로젝트는 Claude Code에 프롬프트 하나를 붙여넣어 연결하세요.
+                팀원은 저장소를 clone한 뒤 argos 한 번으로 합류합니다.
               </p>
               <div className="flex flex-wrap gap-2 justify-center pt-2">
                 <Link

@@ -29,7 +29,7 @@ program.action(makeDefaultCommand(realDeps))
 // Setup command (called with onboard token from web signup prompt)
 program
   .command('setup')
-  .description('non-interactive setup using onboard token from web signup')
+  .description('non-interactive setup or existing project connection using onboard token')
   .option('--token <token>', 'onboard token issued by the Argos web app')
   .option('--api-url <url>', 'API URL override (for self-hosting)')
   .action(makeSetupCommand(realDeps))

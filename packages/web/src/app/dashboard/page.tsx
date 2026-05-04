@@ -6,11 +6,12 @@ import { db } from '@/lib/server/db'
 import { issueOnboardToken } from '@/lib/server/auth-actions'
 
 function buildOnboardPrompt(token: string): string {
-  return `아래 명령을 실행해 현재 디렉토리에 Argos를 셋업해줘:
+  return `새 Argos 프로젝트로 추적할 저장소 루트에서 아래 명령을 실행해줘:
 
 npm install -g argos-ai@latest && argos setup --token=${token}
 
-끝나면 .argos/project.json 과 .claude/settings.json 을 커밋해줘.`
+끝나면 .argos/project.json 과 .claude/settings.json 을 커밋해줘.
+이미 .argos/project.json 이 커밋된 기존 저장소에 합류하는 팀원은 repo 루트에서 argos 만 실행하면 돼.`
 }
 
 export default async function DashboardPage() {
