@@ -317,6 +317,42 @@ describe('makeHookCommand orchestration', () => {
     expect(deps.transcript.extractUsage).not.toHaveBeenCalled()
   })
 
+  it('sends SessionStart slash commands as Skill events', async () => {
+    const deps = makeMockDeps({
+      transcript: {
+        extractUsage: vi.fn().mockResolvedValue(null),
+        extractUsagePerTurn: vi.fn().mockResolvedValue([]),
+        detectSlashCommand: vi.fn().mockResolvedValue('new-task-doc'),
+        extractMessages: vi.fn().mockResolvedValue([]),
+        extractSummary: vi.fn().mockResolvedValue(null),
+      },
+    })
+    const transcriptPath = join(tempDir, 'transcript.jsonl')
+    writeFileSync(transcriptPath, '', 'utf8')
+
+    setStdin(
+      makeStdin(
+        JSON.stringify({
+          hook_event_name: 'SessionStart',
+          session_id: 'x',
+          transcript_path: transcriptPath,
+        })
+      )
+    )
+    await makeHookCommand(deps)({})
+
+    expect(deps.events.sendBackground).toHaveBeenCalledWith(
+      'https://api.example.com/api/events',
+      MOCK_CONFIG.token,
+      expect.objectContaining({
+        hookEventName: 'SESSION_START',
+        isSlashCommand: true,
+        toolName: 'Skill',
+        toolInput: { skill: 'new-task-doc' },
+      })
+    )
+  })
+
   it('does NOT call transcript functions for PreToolUse event', async () => {
     const deps = makeMockDeps()
     setStdin(

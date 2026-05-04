@@ -140,7 +140,7 @@ function SkillsContent({
                 <th className="text-right py-3 px-4 font-medium whitespace-nowrap">
                   <span className="inline-flex items-center gap-1">
                     Users
-                    <InfoTooltip content="집계 기간 내 이 skill을 한 번이라도 호출한 distinct user_id 수 (events 테이블 기준, COUNT(DISTINCT user_id))." />
+                    <InfoTooltip content="집계 기간 내 이 skill을 한 번이라도 호출한 distinct user_id 수. events의 Skill 호출과 transcript 메시지의 slash command 태그를 함께 집계합니다." />
                   </span>
                 </th>
                 <th className="text-right py-3 px-4 font-medium whitespace-nowrap">

@@ -39,19 +39,57 @@ export async function GET(
     }
 
     const skills = await db.$queryRaw<RawSkillRow[]>`
-      WITH skill_events AS (
+      WITH event_skill_calls AS (
         SELECT
           skill_name,
-          COUNT(*)                   AS call_count,
-          COUNT(DISTINCT session_id) AS session_count,
-          COUNT(DISTINCT user_id)    AS user_count,
-          MAX(timestamp)             AS last_used_at
+          session_id,
+          user_id,
+          timestamp
         FROM events
         WHERE is_skill_call = true
           AND project_id = ANY(${projectIds}::text[])
           AND skill_name IS NOT NULL
           AND timestamp >= ${from}
           AND timestamp <= ${to}
+      ),
+      message_slash_calls AS (
+        SELECT
+          slash_match.match[1] AS skill_name,
+          m.session_id,
+          s.user_id,
+          m.timestamp
+        FROM messages m
+        JOIN claude_sessions s ON s.id = m.session_id
+        CROSS JOIN LATERAL regexp_matches(
+          m.content,
+          '<command-message>[^<]*</command-message>[[:space:]]*<command-name>/?([^<[:space:]]+)</command-name>',
+          'g'
+        ) AS slash_match(match)
+        WHERE m.role = 'HUMAN'
+          AND s.project_id = ANY(${projectIds}::text[])
+          AND m.timestamp >= ${from}
+          AND m.timestamp <= ${to}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM events e
+            WHERE e.session_id = m.session_id
+              AND e.is_skill_call = true
+              AND e.is_slash_command = true
+              AND e.skill_name = slash_match.match[1]
+          )
+      ),
+      skill_events AS (
+        SELECT
+          skill_name,
+          COUNT(*)                   AS call_count,
+          COUNT(DISTINCT session_id) AS session_count,
+          COUNT(DISTINCT user_id)    AS user_count,
+          MAX(timestamp)             AS last_used_at
+        FROM (
+          SELECT * FROM event_skill_calls
+          UNION ALL
+          SELECT * FROM message_slash_calls
+        ) all_skill_calls
         GROUP BY skill_name
       ),
       skill_durations AS (

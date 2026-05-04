@@ -180,6 +180,8 @@ export const makeHookCommand: CommandFactory =
         const slashSkill = await deps.transcript.detectSlashCommand(event.transcript_path)
         if (slashSkill) {
           payload.isSlashCommand = true
+          payload.toolName = 'Skill'
+          payload.toolInput = { skill: slashSkill }
         }
       }
 

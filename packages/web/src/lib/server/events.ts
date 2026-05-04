@@ -10,22 +10,25 @@ export interface DerivedFields {
 }
 
 // toolName === 'Skill' → isSkillCall=true, skillName=toolInput.skill
+// Slash commands are normalized by the CLI into toolInput.skill as well.
 // toolName === 'Agent' → isAgentCall=true, agentType=toolInput.subagent_type, agentDesc=toolInput.description
 // isSlashCommand은 CLI가 채워 보내므로 payload에서 그대로 읽음
 export function deriveFields(payload: IngestEventPayload): DerivedFields {
-  const isSkillCall = payload.toolName === 'Skill'
   const isAgentCall = payload.toolName === 'Agent'
 
   let skillName: string | null = null
   let agentType: string | null = null
   let agentDesc: string | null = null
 
-  if (isSkillCall && payload.toolInput) {
+  if (payload.toolInput) {
     const skill = payload.toolInput['skill']
     if (typeof skill === 'string') {
       skillName = skill
     }
   }
+
+  const isSkillCall =
+    payload.toolName === 'Skill' || (payload.isSlashCommand === true && skillName !== null)
 
   if (isAgentCall && payload.toolInput) {
     const subagentType = payload.toolInput['subagent_type']
