@@ -39,6 +39,7 @@ model User {
   memberships   OrgMembership[]
   cliTokens     CliToken[]
   onboardTokens OnboardToken[]
+  passwordResetTokens PasswordResetToken[]
   sessions      ClaudeSession[]
   events        Event[]
   usageRecords  UsageRecord[]
@@ -99,6 +100,24 @@ model OnboardToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("onboard_tokens")
+}
+
+// ─── PasswordResetToken ────────────────────────────────────────────────────
+// 관리자가 발급하는 비밀번호 재설정 링크용 1회용 토큰.
+// 토큰 원문은 URL에만 노출하고 DB에는 SHA-256 해시만 저장한다.
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique @map("token_hash")
+  userId    String    @map("user_id")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
 }
 
 // ─── CliToken ──────────────────────────────────────────────────────────────
