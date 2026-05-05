@@ -1,4 +1,5 @@
 import type { SessionDetail } from '@argos/shared'
+import { getSubagentType } from './subagent-tools'
 export { formatSlashCommandText } from './slash-command'
 
 export type MessageEvent = {
@@ -35,12 +36,6 @@ function getSkillName(toolName: string, input: Record<string, unknown> | null): 
   return typeof skill === 'string' ? skill : null
 }
 
-function getAgentType(toolName: string, input: Record<string, unknown> | null): string | null {
-  if (toolName !== 'Agent' || !input) return null
-  const t = input['subagent_type']
-  return typeof t === 'string' ? t : null
-}
-
 export const SLASH_COMMAND_TAG_RE =
   /<command-message>[^<]*<\/command-message>\s*<command-name>\/([^<\s]+)<\/command-name>/g
 
@@ -65,7 +60,7 @@ export function messagesToTimeline(messages: SessionDetail['messages']): Timelin
       const toolName = m.toolName ?? 'unknown'
       const toolInput = (m.toolInput ?? null) as Record<string, unknown> | null
       const skillName = getSkillName(toolName, toolInput)
-      const agentType = getAgentType(toolName, toolInput)
+      const agentType = getSubagentType(toolName, toolInput)
       return [
         {
           kind: 'tool',
@@ -77,7 +72,7 @@ export function messagesToTimeline(messages: SessionDetail['messages']): Timelin
           sequence: m.sequence,
           isSkillCall: toolName === 'Skill',
           skillName,
-          isAgentCall: toolName === 'Agent',
+          isAgentCall: agentType !== null,
           agentType,
         },
       ]

@@ -105,7 +105,7 @@ function EventTooltipBody({
   const label = event.isSkillCall && event.skillName
     ? `Skill: ${event.skillName}`
     : event.isAgentCall && event.agentType
-      ? `Agent: ${event.agentType}`
+      ? `Subagent: ${event.agentType}`
       : event.toolName
   return (
     <>

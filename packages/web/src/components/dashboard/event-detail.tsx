@@ -37,7 +37,7 @@ function ToolEventBody({ event }: { event: ToolEvent }) {
           )}
           {event.isAgentCall && event.agentType && (
             <span className="inline-flex items-center rounded-full bg-brand-2-subtle px-2 py-0.5 text-xs text-brand-2">
-              Agent: {event.agentType}
+              Subagent: {event.agentType}
             </span>
           )}
         </div>
@@ -88,13 +88,14 @@ function getHeaderLabel(event: TimelineEvent): string {
   if (event.kind === "message") {
     return event.role === "HUMAN" ? "User" : "Agent";
   }
+  if (event.isAgentCall) return "Subagent";
   return event.toolName;
 }
 
 function getHeaderSubLabel(event: TimelineEvent): string | null {
   if (event.kind !== "tool") return null;
   if (event.isSkillCall && event.skillName) return `Skill: ${event.skillName}`;
-  if (event.isAgentCall && event.agentType) return `Agent: ${event.agentType}`;
+  if (event.isAgentCall && event.agentType) return `Subagent: ${event.agentType}`;
   return null;
 }
 

@@ -1,4 +1,5 @@
 import type { IngestEventPayload } from '@argos/shared'
+import { getSubagentDescription, getSubagentType } from '../subagent-tools'
 
 export interface DerivedFields {
   isSkillCall: boolean
@@ -11,14 +12,11 @@ export interface DerivedFields {
 
 // toolName === 'Skill' → isSkillCall=true, skillName=toolInput.skill
 // Slash commands are normalized by the CLI into toolInput.skill as well.
-// toolName === 'Agent' → isAgentCall=true, agentType=toolInput.subagent_type, agentDesc=toolInput.description
+// toolName === 'Agent' 또는 'Task' + subagent_type → isAgentCall=true
+// agentType=toolInput.subagent_type, agentDesc=toolInput.description
 // isSlashCommand은 CLI가 채워 보내므로 payload에서 그대로 읽음
 export function deriveFields(payload: IngestEventPayload): DerivedFields {
-  const isAgentCall = payload.toolName === 'Agent'
-
   let skillName: string | null = null
-  let agentType: string | null = null
-  let agentDesc: string | null = null
 
   if (payload.toolInput) {
     const skill = payload.toolInput['skill']
@@ -30,23 +28,14 @@ export function deriveFields(payload: IngestEventPayload): DerivedFields {
   const isSkillCall =
     payload.toolName === 'Skill' || (payload.isSlashCommand === true && skillName !== null)
 
-  if (isAgentCall && payload.toolInput) {
-    const subagentType = payload.toolInput['subagent_type']
-    const description = payload.toolInput['description']
-
-    if (typeof subagentType === 'string') {
-      agentType = subagentType
-    }
-    if (typeof description === 'string') {
-      agentDesc = description
-    }
-  }
+  const agentType = getSubagentType(payload.toolName, payload.toolInput ?? null)
+  const agentDesc = getSubagentDescription(payload.toolName, payload.toolInput ?? null)
 
   return {
     isSkillCall,
     skillName,
     isSlashCommand: payload.isSlashCommand ?? false, // CLI가 채워서 보냄, 없으면 false
-    isAgentCall,
+    isAgentCall: agentType !== null,
     agentType,
     agentDesc,
   }

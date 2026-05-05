@@ -19,7 +19,8 @@ export default function MetricsMethodologyPage() {
         <code>events</code> 테이블에서 <code>is_skill_call = true</code> (또는{' '}
         <code>is_agent_call = true</code>) 이고{' '}
         <code>skill_name IS NOT NULL</code> (또는 <code>agent_type IS NOT NULL</code>)인 행을
-        그룹별로 COUNT한 값입니다.
+        그룹별로 COUNT한 값입니다. Agent 호출은 Claude Code의 <code>Agent</code> 또는{' '}
+        <code>Task</code> tool 중 <code>tool_input.subagent_type</code>이 있는 호출입니다.
       </p>
       <pre className="text-xs overflow-x-auto">
         <code>{`SELECT skill_name, COUNT(*) AS call_count
@@ -88,6 +89,12 @@ GROUP BY skill_name`}</code>
 )
 -- 매핑 단계에서: duration_sample_count < 3 → medianDurationMs = null`}</code>
       </pre>
+      <p>
+        Agent duration도 같은 방식으로 계산하되, sub agent 호출이 <code>Task</code> tool로
+        기록되는 Claude Code transcript를 포함하기 위해{' '}
+        <code>m.tool_name IN (&apos;Agent&apos;, &apos;Task&apos;)</code>와{' '}
+        <code>m.tool_input-&gt;&gt;&apos;subagent_type&apos;</code>을 사용합니다.
+      </p>
 
       <h3>토큰 지표 (inputTokens / outputTokens / cacheReadTokens / cacheCreationTokens)</h3>
       <p>

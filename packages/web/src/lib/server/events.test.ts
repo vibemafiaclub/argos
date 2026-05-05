@@ -31,4 +31,39 @@ describe('deriveFields', () => {
       isSlashCommand: false,
     })
   })
+
+  it('marks Task tool calls with subagent_type as agent calls', () => {
+    expect(
+      deriveFields({
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        hookEventName: 'PRE_TOOL_USE',
+        toolName: 'Task',
+        toolInput: {
+          subagent_type: 'code-reviewer',
+          description: 'Review recent changes',
+        },
+      })
+    ).toMatchObject({
+      isAgentCall: true,
+      agentType: 'code-reviewer',
+      agentDesc: 'Review recent changes',
+    })
+  })
+
+  it('keeps ordinary Task tool calls out of agent aggregates', () => {
+    expect(
+      deriveFields({
+        projectId: 'project-1',
+        sessionId: 'session-1',
+        hookEventName: 'PRE_TOOL_USE',
+        toolName: 'Task',
+        toolInput: { prompt: 'do work' },
+      })
+    ).toMatchObject({
+      isAgentCall: false,
+      agentType: null,
+      agentDesc: null,
+    })
+  })
 })

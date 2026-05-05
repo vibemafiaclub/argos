@@ -113,7 +113,7 @@ function getSingleLabel(event: TimelineEvent): string {
     return event.role === "HUMAN" ? "User" : "Agent";
   }
   if (event.isSkillCall && event.skillName) return event.skillName;
-  if (event.isAgentCall && event.agentType) return `Agent:${event.agentType}`;
+  if (event.isAgentCall && event.agentType) return event.agentType;
   return "Tool";
 }
 
@@ -123,7 +123,7 @@ function getSinglePreview(event: TimelineEvent): string {
     return normalized.slice(0, 80);
   }
   if (event.isSkillCall && event.skillName) return `Skill: ${event.skillName}`;
-  if (event.isAgentCall && event.agentType) return `Agent: ${event.agentType}`;
+  if (event.isAgentCall && event.agentType) return `Subagent: ${event.agentType}`;
   return event.toolName;
 }
 

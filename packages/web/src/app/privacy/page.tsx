@@ -80,7 +80,7 @@ export default function PrivacyPage() {
           <Field
             name="에이전트 / 스킬 메타"
             items={[
-              'Agent tool 호출: agent_id, agentType, agentDesc',
+              'Subagent 호출(Task/Agent tool): agent_id, agentType, agentDesc',
               'Skill 호출 여부 및 스킬 이름 (/skill-name 패턴 감지)',
               '슬래시 커맨드 호출 여부',
             ]}

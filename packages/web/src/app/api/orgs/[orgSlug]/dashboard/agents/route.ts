@@ -73,10 +73,11 @@ export async function GET(
           percentile_cont(0.5) WITHIN GROUP (ORDER BY m.duration_ms)   AS median_duration_ms
         FROM messages m
         JOIN claude_sessions s ON s.id = m.session_id
-        WHERE m.tool_name = 'Agent'
+        WHERE m.tool_name IN ('Agent', 'Task')
           AND s.project_id = ANY(${projectIds}::text[])
           AND m.role = 'TOOL'
           AND m.duration_ms IS NOT NULL
+          AND m.tool_input->>'subagent_type' IS NOT NULL
           AND m.timestamp >= ${from}
           AND m.timestamp <= ${to}
         GROUP BY m.tool_input->>'subagent_type'
