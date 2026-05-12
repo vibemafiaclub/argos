@@ -32,6 +32,84 @@ const sessionInclude = {
 
 type SessionWithInclude = Prisma.ClaudeSessionGetPayload<{ include: typeof sessionInclude }>
 
+function getSessionTotals(session: SessionWithInclude) {
+  return {
+    inputTokens: session.usageRecords.reduce((sum, r) => sum + r.inputTokens, 0),
+    outputTokens: session.usageRecords.reduce((sum, r) => sum + r.outputTokens, 0),
+    estimatedCostUsd: session.usageRecords.reduce(
+      (sum, r) => sum + (r.estimatedCostUsd ?? 0),
+      0,
+    ),
+  }
+}
+
+function mapSessionItem(session: SessionWithInclude): SessionItem {
+  const totals = getSessionTotals(session)
+  const fallbackTitle = session.messages[0]?.content.slice(0, 200).trim() || null
+  const title = session.title?.trim() || fallbackTitle
+
+  return {
+    id: session.id,
+    userId: session.user.id,
+    userName: session.user.name,
+    startedAt: session.startedAt.toISOString(),
+    endedAt: session.endedAt?.toISOString() ?? null,
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    estimatedCostUsd: totals.estimatedCostUsd,
+    eventCount: session._count.events,
+    title,
+    project: {
+      id: session.project.id,
+      slug: session.project.slug,
+      name: session.project.name,
+    },
+  }
+}
+
+function csvField(value: string | number | null | undefined) {
+  if (value === null || value === undefined) return ''
+  const text = String(value)
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
+}
+
+function buildSessionsCsv(sessions: SessionWithInclude[]) {
+  const headers = [
+    'Session ID',
+    'User',
+    'Project',
+    'Title',
+    'First Prompt',
+    'Input Tokens',
+    'Output Tokens',
+    'Estimated Cost USD',
+    'Event Count',
+    'Started At',
+    'Ended At',
+  ]
+
+  const rows = sessions.map((session) => {
+    const totals = getSessionTotals(session)
+    const title = session.title?.trim() || session.messages[0]?.content.slice(0, 200).trim() || ''
+
+    return [
+      session.id,
+      session.user.name,
+      session.project.name,
+      title,
+      session.messages[0]?.content ?? '',
+      totals.inputTokens,
+      totals.outputTokens,
+      totals.estimatedCostUsd,
+      session._count.events,
+      session.startedAt.toISOString(),
+      session.endedAt?.toISOString() ?? '',
+    ].map(csvField).join(',')
+  })
+
+  return `\uFEFF${[headers.join(','), ...rows].join('\r\n')}`
+}
+
 // GET /api/orgs/:orgSlug/dashboard/sessions?from=&to=&projectId=&page=&pageSize=&sort=recent|cost
 export async function GET(
   req: NextRequest,
@@ -66,9 +144,20 @@ export async function GET(
 
     const sortBy: 'cost' | 'recent' =
       req.nextUrl.searchParams.get('sort') === 'cost' ? 'cost' : 'recent'
+    const wantsCsv = req.nextUrl.searchParams.get('format') === 'csv'
+
+    const filenameFrom = from.toISOString().slice(0, 10)
+    const filenameTo = to.toISOString().slice(0, 10)
+    const csvHeaders = {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="sessions-${orgSlug}-${filenameFrom}-to-${filenameTo}.csv"`,
+    }
 
     // projectIds 가 비었으면 (org 에 project 가 하나도 없음) 즉시 빈 결과 반환
     if (projectIds.length === 0) {
+      if (wantsCsv) {
+        return new NextResponse(buildSessionsCsv([]), { headers: csvHeaders })
+      }
       const body: PaginatedResult<SessionItem> = { items: [], total: 0, page, pageSize }
       return NextResponse.json(body)
     }
@@ -76,6 +165,46 @@ export async function GET(
     const where = {
       projectId: { in: projectIds },
       startedAt: { gte: from, lte: to },
+    }
+
+    if (wantsCsv) {
+      let csvSessions: SessionWithInclude[]
+
+      if (sortBy === 'cost') {
+        const rankedRows = await db.$queryRaw<Array<{ id: string }>>`
+          SELECT cs.id
+          FROM claude_sessions cs
+          LEFT JOIN usage_records ur ON ur.session_id = cs.id
+          WHERE cs.project_id = ANY(${projectIds}::text[])
+            AND cs.started_at >= ${from}
+            AND cs.started_at <= ${to}
+          GROUP BY cs.id, cs.started_at
+          ORDER BY COALESCE(SUM(ur.estimated_cost_usd), 0) DESC,
+                   cs.started_at DESC,
+                   cs.id ASC
+        `
+        const ids = rankedRows.map((r) => r.id)
+        if (ids.length === 0) {
+          csvSessions = []
+        } else {
+          const rows = await db.claudeSession.findMany({
+            where: { id: { in: ids } },
+            include: sessionInclude,
+          })
+          const byId = new Map(rows.map((s) => [s.id, s]))
+          csvSessions = ids
+            .map((id) => byId.get(id))
+            .filter((s): s is SessionWithInclude => !!s)
+        }
+      } else {
+        csvSessions = await db.claudeSession.findMany({
+          where,
+          include: sessionInclude,
+          orderBy: { startedAt: 'desc' },
+        })
+      }
+
+      return new NextResponse(buildSessionsCsv(csvSessions), { headers: csvHeaders })
     }
 
     let sessions: SessionWithInclude[]
@@ -131,31 +260,7 @@ export async function GET(
       total = countResult
     }
 
-    const items: SessionItem[] = sessions.map((s) => {
-      const totalInput = s.usageRecords.reduce((sum, r) => sum + r.inputTokens, 0)
-      const totalOutput = s.usageRecords.reduce((sum, r) => sum + r.outputTokens, 0)
-      const totalCost = s.usageRecords.reduce((sum, r) => sum + (r.estimatedCostUsd ?? 0), 0)
-      const fallbackTitle = s.messages[0]?.content.slice(0, 200).trim() || null
-      const title = s.title?.trim() || fallbackTitle
-
-      return {
-        id: s.id,
-        userId: s.user.id,
-        userName: s.user.name,
-        startedAt: s.startedAt.toISOString(),
-        endedAt: s.endedAt?.toISOString() ?? null,
-        inputTokens: totalInput,
-        outputTokens: totalOutput,
-        estimatedCostUsd: totalCost,
-        eventCount: s._count.events,
-        title,
-        project: {
-          id: s.project.id,
-          slug: s.project.slug,
-          name: s.project.name,
-        },
-      }
-    })
+    const items: SessionItem[] = sessions.map(mapSessionItem)
 
     const body: PaginatedResult<SessionItem> = { items, total, page, pageSize }
     return NextResponse.json(body)

@@ -2,9 +2,10 @@
 
 import { Suspense, useEffect, useState } from 'react'
 import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useSession } from 'next-auth/react'
 import { useOrgs } from '@/hooks/use-orgs'
 import { subDays, format } from 'date-fns'
-import { Trash2 } from 'lucide-react'
+import { Download, Trash2 } from 'lucide-react'
 import { DateRangePicker } from '@/components/dashboard/date-range-picker'
 import {
   useDashboardSessions,
@@ -73,6 +74,7 @@ function SessionsContent({
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const { data: authSession } = useSession()
   const today = new Date()
   const sevenDaysAgo = subDays(today, 7)
 
@@ -93,6 +95,8 @@ function SessionsContent({
     })
 
   const [sessionToDelete, setSessionToDelete] = useState<SessionItem | null>(null)
+  const [isCsvDownloading, setIsCsvDownloading] = useState(false)
+  const [csvError, setCsvError] = useState<string | null>(null)
   const deleteMutation = useDeleteSession(orgSlug)
 
   const showProjectColumn = !projectId
@@ -105,6 +109,49 @@ function SessionsContent({
     }
     const qs = params.toString()
     router.push(qs ? `${pathname}?${qs}` : pathname)
+  }
+
+  const downloadCsv = async () => {
+    if (!authSession?.argosToken) return
+
+    const params = new URLSearchParams({
+      from,
+      to,
+      format: 'csv',
+    })
+    if (sort === 'cost') params.set('sort', sort)
+    if (projectId) params.set('projectId', projectId)
+
+    setIsCsvDownloading(true)
+    setCsvError(null)
+    try {
+      const res = await fetch(
+        `/api/orgs/${orgSlug}/dashboard/sessions?${params.toString()}`,
+        {
+          headers: {
+            Authorization: `Bearer ${authSession.argosToken}`,
+          },
+        },
+      )
+
+      if (!res.ok) {
+        throw new Error(`CSV download failed: ${res.status} ${res.statusText}`)
+      }
+
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `sessions-${orgSlug}-${from}-to-${to}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch {
+      setCsvError('CSV 다운로드에 실패했습니다. 잠시 후 다시 시도해주세요.')
+    } finally {
+      setIsCsvDownloading(false)
+    }
   }
 
   if (isLoading) {
@@ -149,24 +196,45 @@ function SessionsContent({
 
   const colSpan = showProjectColumn ? 8 : 7
 
+  const toolbar = (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+      <SortPicker
+        value={sort}
+        onChange={(next) =>
+          setQuery({
+            sort: next === 'recent' ? null : next,
+            page: null,
+          })
+        }
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={downloadCsv}
+        disabled={isCsvDownloading || !authSession?.argosToken}
+      >
+        <Download data-icon="inline-start" className="size-4" />
+        {isCsvDownloading ? 'Downloading...' : 'Download CSV'}
+      </Button>
+      <DateRangePicker />
+    </div>
+  )
+
+  const csvErrorAlert = csvError ? (
+    <Alert variant="destructive">
+      <AlertDescription>{csvError}</AlertDescription>
+    </Alert>
+  ) : null
+
   if (total === 0) {
     return (
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
           <h1 className="text-2xl font-semibold">Sessions</h1>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <SortPicker
-              value={sort}
-              onChange={(next) =>
-                setQuery({
-                  sort: next === 'recent' ? null : next,
-                  page: null,
-                })
-              }
-            />
-            <DateRangePicker />
-          </div>
+          {toolbar}
         </div>
+
+        {csvErrorAlert}
 
         <div className="bg-card rounded-xl ring-1 ring-foreground/10 p-12 text-center">
           <h2 className="text-lg font-medium mb-2">
@@ -186,19 +254,10 @@ function SessionsContent({
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <h1 className="text-2xl font-semibold">Sessions</h1>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-          <SortPicker
-            value={sort}
-            onChange={(next) =>
-              setQuery({
-                sort: next === 'recent' ? null : next,
-                page: null,
-              })
-            }
-          />
-          <DateRangePicker />
-        </div>
+        {toolbar}
       </div>
+
+      {csvErrorAlert}
 
       <div className="bg-card rounded-xl ring-1 ring-foreground/10 overflow-hidden">
         <div className="relative overflow-x-auto">
