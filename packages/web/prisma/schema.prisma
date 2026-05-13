@@ -43,6 +43,7 @@ model User {
   sessions      ClaudeSession[]
   events        Event[]
   usageRecords  UsageRecord[]
+  projectMembers ProjectMember[]
 
   @@map("users")
 }
@@ -151,9 +152,26 @@ model Project {
   events       Event[]
   usageRecords UsageRecord[]
   dailyStats   DailyProjectStat[]
+  members      ProjectMember[]
 
   @@unique([orgId, slug])
   @@map("projects")
+}
+
+// ─── ProjectMember ─────────────────────────────────────────────────────────
+// 프로젝트별 접근 제어. OWNER/MANAGER는 org 역할로 우회하므로 이 테이블 없이도 접근 가능.
+// MEMBER/VIEWER는 이 테이블에 명시적으로 추가된 경우에만 해당 프로젝트 접근 가능.
+
+model ProjectMember {
+  projectId String   @map("project_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, userId])
+  @@map("project_members")
 }
 
 // ─── DailyProjectStat ──────────────────────────────────────────────────────

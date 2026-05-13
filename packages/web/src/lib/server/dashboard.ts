@@ -64,7 +64,9 @@ export async function assertOrgAccessBySlug(
 }
 
 /**
- * 프로젝트의 org 멤버십 확인 (없으면 throw)
+ * 프로젝트 접근 권한 확인.
+ * - OWNER/MANAGER: org 멤버이면 project 무조건 접근 가능.
+ * - MEMBER/VIEWER: org 멤버 + project_members에 명시적으로 등록된 경우에만 접근 가능.
  */
 export async function assertProjectAccess(
   projectId: string,
@@ -74,11 +76,16 @@ export async function assertProjectAccess(
     where: { id: projectId },
     select: {
       orgId: true,
+      members: {
+        where: { userId },
+        select: { userId: true },
+        take: 1,
+      },
       organization: {
         select: {
           memberships: {
             where: { userId },
-            select: { id: true },
+            select: { id: true, role: true },
             take: 1,
           },
         },
@@ -90,7 +97,18 @@ export async function assertProjectAccess(
     throw new Error('Project not found')
   }
 
-  if (project.organization.memberships.length === 0) {
+  const orgMembership = project.organization.memberships[0]
+  if (!orgMembership) {
+    throw new Error('Forbidden')
+  }
+
+  // OWNER/MANAGER는 project_members 상관없이 접근 가능
+  if (orgMembership.role === 'OWNER' || orgMembership.role === 'MANAGER') {
+    return { orgId: project.orgId }
+  }
+
+  // MEMBER/VIEWER는 project_members에 등록된 경우에만 접근 가능
+  if (project.members.length === 0) {
     throw new Error('Forbidden')
   }
 

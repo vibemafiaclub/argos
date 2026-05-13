@@ -38,7 +38,7 @@ export async function GET(
     }
 
     const projectIdParam = req.nextUrl.searchParams.get('projectId')
-    const projectIds = await resolveOrgScopedProjectIds(orgId, projectIdParam)
+    const projectIds = await resolveOrgScopedProjectIds(orgId, userId, access.role, projectIdParam)
     if (projectIds instanceof NextResponse) return projectIds
 
     const fromQuery = req.nextUrl.searchParams.get('from') ?? undefined

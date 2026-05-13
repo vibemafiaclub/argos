@@ -19,18 +19,47 @@ export interface ProjectDetail {
 }
 
 /**
- * 특정 유저가 멤버로 속한 모든 org의 프로젝트 목록을 반환한다.
+ * 특정 유저가 접근 가능한 모든 org의 프로젝트 목록을 반환한다.
+ * - OWNER/MANAGER인 org: 해당 org의 모든 프로젝트
+ * - MEMBER/VIEWER인 org: project_members에 등록된 프로젝트만
+ *
  * GET /api/projects 와 dashboard 서버 컴포넌트에서 공유.
  */
 export async function getProjectsForUser(
   userId: string
 ): Promise<ProjectListItem[]> {
-  const projectList = await db.project.findMany({
-    where: { organization: { memberships: { some: { userId } } } },
-    include: { organization: true },
+  const orgMemberships = await db.orgMembership.findMany({
+    where: { userId },
+    select: { orgId: true, role: true },
   })
 
-  return projectList.map((p) => ({
+  const adminOrgIds = orgMemberships
+    .filter((m) => m.role === 'OWNER' || m.role === 'MANAGER')
+    .map((m) => m.orgId)
+
+  const memberOrgIds = orgMemberships
+    .filter((m) => m.role === 'MEMBER' || m.role === 'VIEWER')
+    .map((m) => m.orgId)
+
+  const [adminProjects, memberProjects] = await Promise.all([
+    adminOrgIds.length > 0
+      ? db.project.findMany({
+          where: { orgId: { in: adminOrgIds } },
+          include: { organization: true },
+        })
+      : [],
+    memberOrgIds.length > 0
+      ? db.project.findMany({
+          where: {
+            orgId: { in: memberOrgIds },
+            members: { some: { userId } },
+          },
+          include: { organization: true },
+        })
+      : [],
+  ])
+
+  return [...adminProjects, ...memberProjects].map((p) => ({
     id: p.id,
     orgId: p.orgId,
     orgName: p.organization.name,
@@ -46,9 +75,8 @@ export type GetProjectForUserResult =
 
 /**
  * 특정 유저가 접근 가능한 프로젝트 1건을 반환한다.
- * - 프로젝트가 없으면 not_found
- * - 멤버가 아니면 forbidden
- * GET /api/projects/:projectId 와 dashboard layout에서 공유.
+ * - OWNER/MANAGER: org 멤버이면 접근 가능
+ * - MEMBER/VIEWER: org 멤버 + project_members 등록 필요
  */
 export async function getProjectForUser(
   projectId: string,
@@ -62,11 +90,16 @@ export async function getProjectForUser(
       name: true,
       slug: true,
       createdAt: true,
+      members: {
+        where: { userId },
+        select: { userId: true },
+        take: 1,
+      },
       organization: {
         select: {
           memberships: {
             where: { userId },
-            select: { id: true },
+            select: { id: true, role: true },
             take: 1,
           },
         },
@@ -78,7 +111,13 @@ export async function getProjectForUser(
     return { kind: 'not_found' }
   }
 
-  if (project.organization.memberships.length === 0) {
+  const orgMembership = project.organization.memberships[0]
+  if (!orgMembership) {
+    return { kind: 'forbidden' }
+  }
+
+  const isAdmin = orgMembership.role === 'OWNER' || orgMembership.role === 'MANAGER'
+  if (!isAdmin && project.members.length === 0) {
     return { kind: 'forbidden' }
   }
 
@@ -110,11 +149,16 @@ export async function updateProjectForUser(
     select: {
       id: true,
       orgId: true,
+      members: {
+        where: { userId },
+        select: { userId: true },
+        take: 1,
+      },
       organization: {
         select: {
           memberships: {
             where: { userId },
-            select: { id: true },
+            select: { id: true, role: true },
             take: 1,
           },
         },
@@ -126,7 +170,13 @@ export async function updateProjectForUser(
     return { kind: 'not_found' }
   }
 
-  if (existing.organization.memberships.length === 0) {
+  const orgMembership = existing.organization.memberships[0]
+  if (!orgMembership) {
+    return { kind: 'forbidden' }
+  }
+
+  const isAdmin = orgMembership.role === 'OWNER' || orgMembership.role === 'MANAGER'
+  if (!isAdmin && existing.members.length === 0) {
     return { kind: 'forbidden' }
   }
 

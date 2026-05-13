@@ -35,7 +35,7 @@ export async function GET(
     }
 
     const projectIdParam = req.nextUrl.searchParams.get('projectId')
-    const projectIds = await resolveOrgScopedProjectIds(access.org.id, projectIdParam)
+    const projectIds = await resolveOrgScopedProjectIds(access.org.id, userId, access.role, projectIdParam)
     if (projectIds instanceof NextResponse) return projectIds
 
     const weekParam = req.nextUrl.searchParams.get('week')
