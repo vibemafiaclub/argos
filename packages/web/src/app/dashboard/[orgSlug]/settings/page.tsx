@@ -236,6 +236,23 @@ function OrgSettingsContent({ orgSlug }: { orgSlug: string }) {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>Project Access</CardTitle>
+          <CardDescription>
+            MEMBER / VIEWER 역할에게 보이는 프로젝트를 제어합니다.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link
+            href={`/dashboard/${currentOrg.slug}/settings/projects`}
+            className="text-sm font-medium text-primary hover:underline"
+          >
+            프로젝트 접근 관리 →
+          </Link>
+        </CardContent>
+      </Card>
+
       <OrgSettingsForm
         key={`${currentOrg.slug}:${currentOrg.name}`}
         orgSlug={currentOrg.slug}
