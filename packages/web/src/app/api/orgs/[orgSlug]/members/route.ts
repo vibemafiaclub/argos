@@ -4,6 +4,10 @@ import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
 import { assertOrgAccessBySlugOrResponse } from '@/lib/server/dashboard-route-helper'
 import { canManageOrg, forbiddenByRole } from '@/lib/server/rbac'
+import {
+  getDailyRollupsForProjects,
+  aggregateUserStats,
+} from '@/lib/server/daily-rollup'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,16 +32,34 @@ export async function GET(
       return forbiddenByRole(access.role, 'MANAGER 이상')
     }
 
-    const memberships = await db.orgMembership.findMany({
-      where: { orgId: access.org.id },
-      select: {
-        id: true,
-        role: true,
-        createdAt: true,
-        user: { select: { id: true, name: true, email: true, avatarUrl: true } },
-      },
-      orderBy: { createdAt: 'asc' },
-    })
+    const [memberships, projects] = await Promise.all([
+      db.orgMembership.findMany({
+        where: { orgId: access.org.id },
+        select: {
+          id: true,
+          role: true,
+          createdAt: true,
+          user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      db.project.findMany({
+        where: { orgId: access.org.id },
+        select: { id: true },
+      }),
+    ])
+
+    // 최근 7일 유저별 비용 집계
+    const to = new Date()
+    const from = new Date(to)
+    from.setDate(from.getDate() - 6) // 오늘 포함 7일
+    from.setHours(0, 0, 0, 0)
+
+    const projectIds = projects.map((p) => p.id)
+    const rollups = await getDailyRollupsForProjects(projectIds, from, to)
+    const userStatsMap = new Map(
+      aggregateUserStats(rollups).map((u) => [u.userId, u.estimatedCostUsd])
+    )
 
     return NextResponse.json({
       members: memberships.map((m) => ({
@@ -48,6 +70,7 @@ export async function GET(
         avatarUrl: m.user.avatarUrl,
         role: m.role,
         joinedAt: m.createdAt.toISOString(),
+        sevenDayCostUsd: userStatsMap.get(m.user.id) ?? 0,
       })),
     })
   } catch (err) {

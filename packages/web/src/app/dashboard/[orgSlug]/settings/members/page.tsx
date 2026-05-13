@@ -28,6 +28,31 @@ import {
 import { useOrgs } from '@/hooks/use-orgs'
 import type { OrgRole } from '@argos/shared'
 import { ApiError } from '@/lib/api-client'
+import { cn } from '@/lib/utils'
+
+function CostBar({ cost, maxCost }: { cost: number; maxCost: number }) {
+  const pct = maxCost > 0 ? Math.round((cost / maxCost) * 100) : 0
+  const barColor =
+    pct >= 67
+      ? 'bg-destructive'
+      : pct >= 34
+        ? 'bg-[var(--color-chart-4)]'
+        : 'bg-[var(--color-chart-3)]'
+
+  return (
+    <div className="flex items-center gap-2 w-44">
+      <div className="flex-1 h-1.5 rounded-sm bg-muted overflow-hidden">
+        <div
+          className={cn('h-full rounded-sm transition-all', barColor)}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="text-xs tabular-nums text-muted-foreground w-14 text-right shrink-0">
+        ${cost.toFixed(2)}
+      </span>
+    </div>
+  )
+}
 
 const ROLE_LABEL: Record<OrgRole, string> = {
   OWNER: 'Owner',
@@ -58,6 +83,7 @@ function MembersTable({
   const removeMember = useRemoveMember(orgSlug)
   const [errorByUser, setErrorByUser] = useState<Record<string, string>>({})
 
+  const maxCost = Math.max(...members.map((m) => m.sevenDayCostUsd), 0)
   const canChangeToOwner = currentRole === 'OWNER'
   const adminCount = members.filter(
     (m) => m.role === 'OWNER' || m.role === 'MANAGER'
@@ -124,6 +150,7 @@ function MembersTable({
                 </div>
               )}
             </div>
+            <CostBar cost={m.sevenDayCostUsd} maxCost={maxCost} />
             <div className="w-40">
               <Select
                 value={m.role}

@@ -13,6 +13,7 @@ export interface MemberListItem {
   avatarUrl: string | null
   role: OrgRole
   joinedAt: string
+  sevenDayCostUsd: number
 }
 
 export function useMembers(orgSlug: string) {
