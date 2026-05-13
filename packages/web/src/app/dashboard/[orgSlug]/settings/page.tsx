@@ -14,11 +14,20 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useOrgs } from '@/hooks/use-orgs'
 import { useUpdateOrg } from '@/hooks/use-update-org'
+import { useMe, useUpdateMe } from '@/hooks/use-update-me'
 import { ApiError } from '@/lib/api-client'
 import { DeleteOrgModal } from '@/components/org/delete-org-modal'
 import Link from 'next/link'
+import type { ClaudePlan } from '@argos/shared'
 
 interface OrgSettingsFormProps {
   orgSlug: string
@@ -179,6 +188,75 @@ function OrgSettingsForm({
   )
 }
 
+const PLAN_LABELS: Record<ClaudePlan, string> = {
+  FREE: 'Free',
+  PRO: 'Pro ($20/mo)',
+  MAX: 'Max ($100+/mo)',
+  TEAM: 'Team',
+  ENTERPRISE: 'Enterprise',
+}
+
+function MyProfileCard() {
+  const { data, isLoading } = useMe()
+  const updateMe = useUpdateMe()
+  const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const currentPlan = data?.user?.claudePlan ?? ''
+
+  const handlePlanChange = async (value: string) => {
+    setSuccessMsg(null)
+    setErrorMsg(null)
+    try {
+      await updateMe.mutateAsync({
+        claudePlan: value === 'none' ? null : (value as ClaudePlan),
+      })
+      setSuccessMsg('저장되었습니다.')
+    } catch {
+      setErrorMsg('저장 중 오류가 발생했습니다.')
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>내 프로필</CardTitle>
+        <CardDescription>본인의 Claude 요금제를 선택해주세요.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading ? (
+          <Skeleton className="h-9 w-48" />
+        ) : (
+          <div className="space-y-1.5">
+            <Label>Claude 요금제</Label>
+            <Select
+              value={currentPlan || 'none'}
+              onValueChange={(v) => handlePlanChange(v ?? 'none')}
+              disabled={updateMe.isPending}
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="선택..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">미설정</SelectItem>
+                {(Object.keys(PLAN_LABELS) as ClaudePlan[]).map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {PLAN_LABELS[p]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {errorMsg && <p className="text-xs text-destructive">{errorMsg}</p>}
+            {!errorMsg && successMsg && (
+              <p className="text-xs text-success">{successMsg}</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function OrgSettingsContent({ orgSlug }: { orgSlug: string }) {
   const { data, isLoading, error, refetch } = useOrgs()
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -220,6 +298,8 @@ function OrgSettingsContent({ orgSlug }: { orgSlug: string }) {
           조직 정보를 관리합니다.
         </p>
       </div>
+
+      <MyProfileCard />
 
       <Card>
         <CardHeader>
