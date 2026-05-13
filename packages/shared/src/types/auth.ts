@@ -1,8 +1,11 @@
+export type ClaudePlan = 'FREE' | 'PRO' | 'MAX' | 'TEAM' | 'ENTERPRISE'
+
 export interface User {
   id: string
   email: string
   name: string
   avatarUrl?: string | null
+  claudePlan?: ClaudePlan | null
   createdAt: string
 }
 

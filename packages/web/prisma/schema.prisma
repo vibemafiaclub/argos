@@ -28,13 +28,14 @@ model Organization {
 // ─── User ──────────────────────────────────────────────────────────────────
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String   @map("password_hash") // bcrypt hash
+  id           String      @id @default(cuid())
+  email        String      @unique
+  passwordHash String      @map("password_hash") // bcrypt hash
   name         String
-  avatarUrl    String?  @map("avatar_url")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  avatarUrl    String?     @map("avatar_url")
+  claudePlan   ClaudePlan? @map("claude_plan")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
 
   memberships   OrgMembership[]
   cliTokens     CliToken[]
@@ -69,6 +70,17 @@ enum OrgRole {
   MANAGER  // 멤버 관리 + 개인 단위 드릴다운 가능 (OWNER 제외한 전 기능)
   MEMBER   // 기본 역할. 팀 세션·개인 드릴다운 열람 가능
   VIEWER   // 팀 단위 집계만. 개인 식별자·전사·세션 리스트 접근 불가
+}
+
+// ─── ClaudePlan ────────────────────────────────────────────────────────────
+// 멤버가 사용 중인 Claude 요금제. 수동 입력으로만 관리 (Anthropic 공개 API 미제공).
+
+enum ClaudePlan {
+  FREE        // Claude Free
+  PRO         // Claude Pro ($20/mo)
+  MAX         // Claude Max ($100+/mo)
+  TEAM        // Claude for Teams
+  ENTERPRISE  // Claude Enterprise
 }
 
 // ─── CliAuthRequest ────────────────────────────────────────────────────────
