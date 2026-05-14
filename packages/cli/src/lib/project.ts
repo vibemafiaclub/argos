@@ -14,11 +14,14 @@ export interface ProjectConfig {
 }
 
 /**
- * Find .argos/project.json by traversing up from startDir
+ * Find .argos/project.json by traversing up from startDir.
+ * Returns both the config and the absolute path of the discovered file.
  * @param startDir Starting directory (defaults to process.cwd())
- * @returns ProjectConfig or null if not found
+ * @returns { config, configPath } or null if not found
  */
-export function findProjectConfig(startDir?: string): ProjectConfig | null {
+export function findProjectConfigWithPath(
+  startDir?: string,
+): { config: ProjectConfig; configPath: string } | null {
   let currentDir = startDir || process.cwd()
   let depth = 0
   const maxDepth = 10
@@ -35,7 +38,7 @@ export function findProjectConfig(startDir?: string): ProjectConfig | null {
         } else {
           delete parsed.apiUrl
         }
-        return parsed
+        return { config: parsed, configPath }
       } catch {
         return null
       }
@@ -51,6 +54,16 @@ export function findProjectConfig(startDir?: string): ProjectConfig | null {
   }
 
   return null
+}
+
+/**
+ * Find .argos/project.json by traversing up from startDir
+ * @param startDir Starting directory (defaults to process.cwd())
+ * @returns ProjectConfig or null if not found
+ */
+export function findProjectConfig(startDir?: string): ProjectConfig | null {
+  const result = findProjectConfigWithPath(startDir)
+  return result ? result.config : null
 }
 
 /**

@@ -1,6 +1,6 @@
 import { NextResponse, after } from 'next/server'
 import { EventType, Prisma } from '@prisma/client'
-import { IngestEventSchema } from '@argos/shared'
+import { IngestEventSchema, type IngestEventResponse } from '@argos/shared'
 import { db } from '@/lib/server/db'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
@@ -35,9 +35,12 @@ export async function POST(req: Request) {
     // 2. Project 조회 + org 멤버십 확인 (403 if 비멤버)
     const project = await db.project.findUnique({
       where: { id: payload.projectId },
-      include: {
+      select: {
+        id: true,
+        orgId: true,
         organization: {
-          include: {
+          select: {
+            slug: true,
             memberships: {
               where: { userId },
             },
@@ -192,8 +195,18 @@ export async function POST(req: Request) {
       })
     }
 
-    // 7. 즉시 202 Accepted 응답
-    return NextResponse.json({ ok: true }, { status: 202 })
+    // 7. 즉시 202 Accepted 응답 — self-heal payload 포함 (IngestEventResponse superset)
+    return NextResponse.json(
+      {
+        ok: true,
+        project: {
+          id: project.id,
+          orgId: project.orgId,
+          orgSlug: project.organization.slug,
+        },
+      } satisfies IngestEventResponse,
+      { status: 202 }
+    )
   } catch (err) {
     return handleRouteError(err)
   }
