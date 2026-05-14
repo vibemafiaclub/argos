@@ -158,12 +158,13 @@ export const makeHookCommand: CommandFactory =
         return
       }
 
-      // Find project config
-      const project = deps.project.find(process.cwd())
-      if (!project) {
+      // Find project config (with its absolute path for self-heal)
+      const projectResult = deps.project.findWithPath(process.cwd())
+      if (!projectResult) {
         process.exit(0)
         return
       }
+      const { config: project, configPath: projectJsonPath } = projectResult
 
       // Read user config
       const config = deps.config.read()
@@ -229,8 +230,20 @@ export const makeHookCommand: CommandFactory =
 
       // Fire-and-forget: spawn a detached background process to send the event.
       // The main process exits immediately (exit 0), so Claude Code is never blocked.
+      // projectJsonPath is passed so the child can self-heal .argos/project.json if the
+      // server indicates the project has been transferred to a different org (WU-5/WU-6).
       const apiUrl = project.apiUrl ?? config.apiUrl ?? DEFAULT_API_URL
-      deps.events.sendBackground(`${apiUrl}/api/events`, config.token, payload)
+      deps.events.sendBackground({
+        url: `${apiUrl}/api/events`,
+        token: config.token,
+        payload,
+        projectJsonPath,
+        currentConfig: {
+          projectId: project.projectId,
+          orgId: project.orgId,
+          orgSlug: project.orgSlug ?? project.orgId,
+        },
+      })
     } catch (err) {
       debugLog(err)
     } finally {

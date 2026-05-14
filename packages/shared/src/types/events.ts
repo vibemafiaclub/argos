@@ -26,6 +26,16 @@ export interface MessagePayload {
   durationMs?: number
 }
 
+// POST /api/events 성공(202) 응답 타입 — 기존 { ok: true }의 superset
+export interface IngestEventResponse {
+  ok: true
+  project: {
+    id: string
+    orgId: string
+    orgSlug: string
+  }
+}
+
 // CLI가 POST /api/events로 전송하는 payload
 export interface IngestEventPayload {
   sessionId: string

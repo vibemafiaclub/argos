@@ -130,6 +130,8 @@ function setStdin(stream: Readable) {
   Object.defineProperty(process, 'stdin', { value: stream, writable: true, configurable: true })
 }
 
+const MOCK_PROJECT_JSON_PATH = '/test/cwd/.argos/project.json'
+
 function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
   const sendBackground = vi.fn()
   const extractUsage = vi.fn().mockResolvedValue(null)
@@ -145,6 +147,7 @@ function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
     },
     project: {
       find: vi.fn().mockReturnValue(MOCK_PROJECT),
+      findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: MOCK_PROJECT_JSON_PATH }),
       write: vi.fn(),
     },
     auth: {
@@ -214,7 +217,7 @@ describe('makeHookCommand orchestration', () => {
 
   it('exits 0 immediately when project config is missing', async () => {
     const deps = makeMockDeps({
-      project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
+      project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
     })
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'Stop', session_id: 'x' })))
 
@@ -239,6 +242,24 @@ describe('makeHookCommand orchestration', () => {
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'x' })))
     await makeHookCommand(deps)({})
     expect(deps.events.sendBackground).toHaveBeenCalled()
+  })
+
+  it('passes projectJsonPath and currentConfig to sendBackground for self-heal', async () => {
+    const deps = makeMockDeps()
+    setStdin(makeStdin(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'x' })))
+    await makeHookCommand(deps)({})
+    expect(deps.events.sendBackground).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'https://api.example.com/api/events',
+        token: MOCK_CONFIG.token,
+        projectJsonPath: MOCK_PROJECT_JSON_PATH,
+        currentConfig: expect.objectContaining({
+          projectId: MOCK_PROJECT.projectId,
+          orgId: MOCK_PROJECT.orgId,
+          orgSlug: MOCK_PROJECT.orgSlug,
+        }),
+      })
+    )
   })
 
   it('calls extractUsage and extractMessages for Stop event', async () => {
@@ -342,13 +363,15 @@ describe('makeHookCommand orchestration', () => {
     await makeHookCommand(deps)({})
 
     expect(deps.events.sendBackground).toHaveBeenCalledWith(
-      'https://api.example.com/api/events',
-      MOCK_CONFIG.token,
       expect.objectContaining({
-        hookEventName: 'SESSION_START',
-        isSlashCommand: true,
-        toolName: 'Skill',
-        toolInput: { skill: 'new-task-doc' },
+        url: 'https://api.example.com/api/events',
+        token: MOCK_CONFIG.token,
+        payload: expect.objectContaining({
+          hookEventName: 'SESSION_START',
+          isSlashCommand: true,
+          toolName: 'Skill',
+          toolInput: { skill: 'new-task-doc' },
+        }),
       })
     )
   })
@@ -369,6 +392,7 @@ describe('makeHookCommand orchestration', () => {
     const deps = makeMockDeps({
       project: {
         find: vi.fn().mockImplementation(() => { throw new Error('unexpected failure') }),
+        findWithPath: vi.fn().mockImplementation(() => { throw new Error('unexpected failure') }),
         write: vi.fn(),
       },
     })
