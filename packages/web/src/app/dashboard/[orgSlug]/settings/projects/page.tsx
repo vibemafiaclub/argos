@@ -1,7 +1,6 @@
 'use client'
 
 import { use, useState } from 'react'
-import { useSession } from 'next-auth/react'
 import {
   Card,
   CardContent,
@@ -210,7 +209,6 @@ function ProjectMembersPanel({
 }
 
 function ProjectAccessContent({ orgSlug }: { orgSlug: string }) {
-  const { data: session } = useSession()
   const orgs = useOrgs()
   const projects = useProjects(orgSlug)
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')

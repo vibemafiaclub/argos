@@ -34,6 +34,7 @@ export function DeleteOrgModal({
 
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- closing the dialog resets ephemeral confirmation state.
       setConfirmName('')
       mutation.reset()
     }

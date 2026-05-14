@@ -180,6 +180,7 @@ export function SessionActivityRibbon({
   }
 
   const handleEventHover = (idx: number) => (e: React.MouseEvent) => {
+    // eslint-disable-next-line react-hooks/refs -- event handler reads layout ref to position hover tooltip.
     setHover({ kind: 'event', idx, x: trackMouse(e) })
   }
 
@@ -195,6 +196,7 @@ export function SessionActivityRibbon({
       toolName,
       count,
       firstEvent,
+      // eslint-disable-next-line react-hooks/refs -- event handler reads layout ref to position hover tooltip.
       x: trackMouse(e),
     })
   }

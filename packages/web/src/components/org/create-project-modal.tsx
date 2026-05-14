@@ -30,6 +30,7 @@ export function CreateProjectModal({
 
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- closing the dialog resets ephemeral form state.
       setName('')
       mutation.reset()
     }

@@ -28,6 +28,7 @@ export function RenameProjectModal({
 
   useEffect(() => {
     if (project) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- opening the dialog seeds form state from the selected project.
       setName(project.name)
     } else {
       setName('')
