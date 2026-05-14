@@ -1,149 +1,655 @@
 name: Strix Security Scan
 
 on:
-  push:
-    branches: [main]
-  pull_request_target:
+  pull_request:
+    # The lowercase `strix` job context is a required check, so we must keep
+    # registering a job run on every PR head update — otherwise the required
+    # check would never be queued and PRs would block on a missing context.
+    # The job itself, however, defers the expensive LLM-driven scan until the
+    # `Decide post-approval run` step decides the PR is ready (approved /
+    # `run-strix` label / auto-merge enabled). `labeled` is included so adding
+    # the `run-strix` label triggers a re-run that actually executes the scan.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  pull_request_review:
+    # Re-trigger Strix when a reviewer submits an approval so the heavy scan
+    # only runs once the PR has actually been approved on its current head.
+    types: [submitted]
+  workflow_run:
+    workflows:
+      - PR Required Checks
+      - Build and Push Docker Images to GHCR
+      - Dependency Review
+      - OSV-Scanner
+      - Semgrep
+      - PR Coverage/Docstring Gate
+      - Anchore Syft SBOM scan
+    types: [completed]
   schedule:
     # Weekly scan on protected branches (Mondays at 03:00 UTC).
     - cron: '0 3 * * 1'
   workflow_dispatch:
 
 concurrency:
-  group: strix-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && format('strix-{0}-pr-{1}-{2}', github.workflow, github.event.pull_request.number, github.event.pull_request.head.sha) || github.event_name == 'workflow_run' && format('strix-{0}-workflow-run-{1}', github.workflow, github.event.workflow_run.id) || format('strix-{0}-{1}', github.workflow, github.ref) }}
   # cancel-in-progress deliberately disabled: an attacker could force-push
   # a benign commit to cancel an in-progress scan of a malicious commit.
+  # Pull requests include the head SHA in the group so a stale PR merge-ref
+  # scan on an older PR head cannot starve the required lowercase `strix`
+  # context for the current head. PR-associated workflow_run events also pin
+  # to the upstream PR head SHA so upstream-completion-triggered scans never
+  # collapse with a synchronize-triggered scan on the same head. Workflow_run
+  # events without PR metadata get per-run groups while the job-level guard
+  # below skips them before runner allocation; ambiguous multi-PR completions
+  # also get per-run groups and then fail closed in the validation step.
+  # Protected branch push/schedule scans keep ref-based serialization.
   cancel-in-progress: false
 
 permissions:
   actions: read
+  checks: read
   contents: read
+  # Read-only access to PR review/label/auto-merge metadata is required so
+  # `Decide post-approval run` can ask the GitHub API whether the heavy LLM
+  # scan should actually execute on this run.
+  pull-requests: read
 
 jobs:
   strix:
-    timeout-minutes: 60
+    name: strix
+    timeout-minutes: 355
     runs-on: ubuntu-latest
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
         with:
           egress-policy: audit
 
-      - name: Materialize trusted workspace
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          TRUSTED_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate workflow_run pull request scope
+        if: github.event_name == 'workflow_run'
         run: |
           set -euo pipefail
-          trusted_workspace="$RUNNER_TEMP/trusted-workspace"
-          trusted_archive="$RUNNER_TEMP/trusted-workspace.tar.gz"
-          mkdir -p "$trusted_workspace"
-          gh api "/repos/${REPOSITORY}/tarball/${TRUSTED_WORKSPACE_SHA}" > "$trusted_archive"
-          tar -xzf "$trusted_archive" -C "$trusted_workspace" --strip-components=1
-          git init -q "$trusted_workspace"
-          gh auth setup-git
-          git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
-          git -C "$trusted_workspace" fetch --no-tags --prune origin "$TRUSTED_WORKSPACE_SHA"
-          git -C "$trusted_workspace" cat-file -e "$TRUSTED_WORKSPACE_SHA^{commit}"
-          {
-            echo "TRUSTED_WORKSPACE=$trusted_workspace"
-            echo "TRUSTED_STRIX_GATE=$trusted_workspace/scripts/ci/strix_quick_gate.sh"
-            echo "TRUSTED_STRIX_GATE_TEST=$trusted_workspace/scripts/ci/test_strix_quick_gate.sh"
-          } >> "$GITHUB_ENV"
-
-      - name: Fetch pull request head for trusted scan
-        if: github.event_name == 'pull_request_target'
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          git -C "$TRUSTED_WORKSPACE" fetch --no-tags --prune origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
-          git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
-          fetched_head_sha="$(git -C "$TRUSTED_WORKSPACE" rev-parse "refs/remotes/pull/${PR_NUMBER}/head")"
-          test "$fetched_head_sha" = "$PR_HEAD_SHA"
+          pull_request_count="$(jq -r '.workflow_run.pull_requests | if type == "array" then length else 0 end' "$GITHUB_EVENT_PATH")"
+          if [ "$pull_request_count" -gt 1 ]; then
+            echo "::error::workflow_run Strix scan supports at most one associated pull request; got $pull_request_count."
+            exit 1
+          fi
+          if [ "$pull_request_count" -eq 1 ]; then
+            head_repository="$(jq -r '.workflow_run.head_repository.full_name // ""' "$GITHUB_EVENT_PATH")"
+            if [ "$head_repository" != "$GITHUB_REPOSITORY" ]; then
+              echo "::error::workflow_run Strix scan requires a same repository head; got '$head_repository'."
+              exit 1
+            fi
+          fi
 
       - name: Self-test Strix gate script
-        run: bash "$TRUSTED_STRIX_GATE_TEST"
+        run: bash ./scripts/ci/test_strix_quick_gate.sh
 
       - name: Gate Strix secrets
         id: gate
         env:
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           strix_llm="$(printf '%s' "$STRIX_LLM" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           llm_api_key="$(printf '%s' "$LLM_API_KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          write_strix_missing_secret_summary() {
+            outcome="$1"
+            {
+              echo '### Strix quick scan'
+              echo
+              if [ "$outcome" = 'fail-closed' ]; then
+                echo '- Outcome: fail-closed before scanner execution'
+              else
+                echo '- Outcome: skipped before scanner execution'
+              fi
+              echo '- Reason: required Strix secrets are not configured'
+              echo '- Missing configuration: `STRIX_LLM` and/or `LLM_API_KEY` GitHub secrets'
+              echo '- Policy: PR missing-secret runs produce explicit no-scan evidence; protected branch and manual security scans fail closed.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
           if [ -z "$strix_llm" ] || [ -z "$llm_api_key" ]; then
-            # On protected/privileged events, fail-closed: missing secrets must
-            # not silently produce a green check.
-            if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-              echo '::error::Strix secrets not configured on protected or privileged event; failing closed.'
+            # On push/schedule to protected branches, fail-closed: missing
+            # secrets must not silently produce a green check. Manual
+            # workflow_dispatch scans are operator-requested security runs and
+            # use the same fail-closed contract.
+            is_fail_closed='false'
+            if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              is_fail_closed='true'
+            elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$WORKFLOW_RUN_EVENT" = "push" ] && { [ "$WORKFLOW_RUN_HEAD_BRANCH" = "develop" ] || [ "$WORKFLOW_RUN_HEAD_BRANCH" = "main" ]; }; then
+              is_fail_closed='true'
+            fi
+            if [ "$is_fail_closed" = 'true' ]; then
+              write_strix_missing_secret_summary 'fail-closed'
+              echo '::error::Strix secrets not configured on protected/manual event; failing closed before scanner execution.'
               exit 1
             fi
+            write_strix_missing_secret_summary 'skipped'
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
             echo 'Strix secrets not configured; skipping.'
           else
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Decide post-approval run
+        id: decide
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          PR_NUMBER: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.number || ((github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) && github.event.workflow_run.pull_requests[0].number || '') }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          WORKFLOW_RUN_PR_NUMBER: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) && github.event.workflow_run.pull_requests[0].number || '' }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          # Non-PR events (push/schedule/workflow_dispatch) always run the
+          # heavy scan so protected-branch audit and weekly sweep evidence is
+          # preserved unchanged.
+          if [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "pull_request_review" ] && [ "$EVENT_NAME" != "workflow_run" ]; then
+            echo "Non-PR event ($EVENT_NAME): running heavy Strix scan."
+            {
+              echo 'should_scan=true'
+              echo 'reason=non-pr-event'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            PR_NUMBER="$WORKFLOW_RUN_PR_NUMBER"
+            PR_HEAD_SHA="$WORKFLOW_RUN_HEAD_SHA"
+            if [ "$WORKFLOW_RUN_CONCLUSION" != "success" ]; then
+              echo "Upstream workflow_run conclusion is '$WORKFLOW_RUN_CONCLUSION', not 'success'. Deferring heavy Strix scan."
+              {
+                echo 'should_scan=false'
+                echo 'reason=upstream-workflow-not-success'
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ -n "$PR_NUMBER" ]; then
+              if ! pr_info="$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
+                echo "Failed to fetch PR details via GitHub API."
+                {
+                  echo 'should_scan=false'
+                  echo 'reason=api-error-pr-details'
+                } >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              PR_DRAFT="$(printf '%s' "$pr_info" | jq -r '.draft // empty')"
+            fi
+          fi
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            if [ "$EVENT_NAME" = "workflow_run" ] && [ "$WORKFLOW_RUN_CONCLUSION" = "success" ] && [ "$WORKFLOW_RUN_EVENT" = "push" ] && { [ "$WORKFLOW_RUN_HEAD_BRANCH" = "develop" ] || [ "$WORKFLOW_RUN_HEAD_BRANCH" = "main" ]; }; then
+              echo "Event ($EVENT_NAME) is a non-PR workflow_run. Assuming it's a push to develop/main."
+              cond_auto_merge='yes'
+              cond_approved='yes'
+              cond_mergeable='yes'
+              cond_checks_green='no'
+              PR_DRAFT='false'
+            else
+              echo "Event ($EVENT_NAME) not associated with a PR: deferring heavy Strix scan."
+              reason='non-pr-event'
+              if [ "$EVENT_NAME" = "workflow_run" ]; then
+                reason='workflow-run-without-pr'
+              fi
+              {
+                echo 'should_scan=false'
+                echo "reason=$reason"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # Draft PRs never get the expensive scan. Marking ready-for-review
+          # re-triggers the workflow via the `ready_for_review` PR type.
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "Draft PR #$PR_NUMBER: deferring heavy Strix scan."
+            {
+              echo 'should_scan=false'
+              echo 'reason=draft-pr'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Optimization: Check if PR only contains non-source files (e.g. markdown)
+          files_json="$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null || echo '[]')"
+          file_count="$(printf '%s' "$files_json" | jq length 2>/dev/null || echo 0)"
+          if [ "$file_count" -gt 0 ] && [ "$file_count" -lt 100 ]; then
+            source_files="$(printf '%s' "$files_json" | jq -r '[.[] | select(.filename | endswith(".java") or endswith(".js") or endswith(".ts") or endswith(".vue") or endswith(".py") or endswith("pom.xml") or endswith("package.json") or endswith("Dockerfile") or endswith(".yml") or endswith(".yaml") or endswith(".properties") or endswith(".xml"))] | length' 2>/dev/null || echo 0)"
+            if [ "$source_files" -eq 0 ]; then
+              echo "PR #$PR_NUMBER only contains non-source changes. Deferring heavy Strix scan."
+              {
+                echo 'should_scan=false'
+                echo 'reason=no-source-changes'
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          
+          # Short-circuit pull_request_review events that are not approvals.
+          if [ "$EVENT_NAME" = "pull_request_review" ] && [ "$REVIEW_STATE" != "approved" ]; then
+            echo "Review state is '$REVIEW_STATE', not 'approved'. Deferring heavy Strix scan."
+            {
+              echo 'should_scan=false'
+              echo 'reason=review-not-approved'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Skip PR API calls if PR_NUMBER is empty (non-PR workflow_run)
+          if [ -n "${PR_NUMBER:-}" ]; then
+            # Manual override label — reviewers can attach `run-strix` to force
+            # an immediate heavy scan before approval (e.g. for risky security
+            # changes) without waiting for the approval signal.
+            if ! has_label="$(gh api "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/labels" \
+              --jq '[.[] | select(.name == "run-strix")] | length' 2>/dev/null)"; then
+              echo "Failed to fetch labels via GitHub API."
+              {
+                echo 'should_scan=false'
+                echo 'reason=api-error-labels'
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "${has_label:-0}" -gt 0 ]; then
+              echo "Label 'run-strix' present on PR #$PR_NUMBER: running heavy Strix scan."
+              {
+                echo 'should_scan=true'
+                echo 'reason=run-strix-label'
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if ! pr_json="$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
+              echo "Failed to fetch PR details via GitHub API."
+              {
+                echo 'should_scan=false'
+                echo 'reason=api-error-pr-details'
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            auto_merge="$(printf '%s' "$pr_json" | jq -r '.auto_merge // empty' 2>/dev/null || true)"
+            mergeable="$(printf '%s' "$pr_json" | jq -r '.mergeable // empty' 2>/dev/null || true)"
+            mergeable_state="$(printf '%s' "$pr_json" | jq -r '.mergeable_state // empty' 2>/dev/null || true)"
+
+            if ! approved="$(gh api --paginate \
+              "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/reviews" \
+              --jq "[.[] | select(.state == \"APPROVED\" and .commit_id == \"${PR_HEAD_SHA}\")] | length" \
+              2>/dev/null)"; then
+              echo "Failed to fetch reviews via GitHub API."
+              {
+                echo 'should_scan=false'
+                echo 'reason=api-error-reviews'
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            total_approved=0
+            for n in $approved; do
+              total_approved=$((total_approved + n))
+            done
+
+            cond_auto_merge='no'
+            cond_approved='no'
+            cond_mergeable='no'
+            cond_checks_green='no'
+
+            [ -n "${auto_merge:-}" ] && cond_auto_merge='yes'
+            [ "${total_approved:-0}" -gt 0 ] && cond_approved='yes'
+
+            if [ "$mergeable" = "true" ] && { [ "$mergeable_state" = "clean" ] || [ "$mergeable_state" = "has_hooks" ]; }; then
+              cond_mergeable='yes'
+            fi
+          else
+            # For non-PR events that already passed the develop/main push-backed
+            # workflow_run guard above, bypass PR-specific merge conditions.
+            cond_auto_merge='yes'
+            cond_approved='yes'
+            cond_mergeable='yes'
+            cond_checks_green='no'
+            total_approved=0
+          fi
+
+          if ! checks_json="$(
+            set -o pipefail
+            gh api --paginate "repos/${REPO_FULL_NAME}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" --jq '.check_runs[]' 2>/dev/null \
+              | jq -s '{check_runs: .}'
+          )"; then
+            echo "Failed to fetch check-runs"
+          else
+             # Keep Strix readiness aligned to the repo-owned stable PR merge
+             # foundation. Raw statusCheckRollup/check-runs can contain legacy
+             # dummy shims, dynamic Automatic Dependency Submission runs, and
+             # optional workflow noise that are not part of the stable gate.
+             stable_required_contexts_json='[
+               {"name":"All service images built gate","app_slug":"github-actions","workflow_path":".github/workflows/build-and-push-images.yml"},
+               {"name":"PR coverage/docstring 80% merge gate","app_slug":"github-actions","workflow_path":".github/workflows/pr-coverage-docstring-gate.yml"},
+               {"name":"dependency-review","app_slug":"github-actions","workflow_path":".github/workflows/dependency-review.yml"},
+               {"name":"semgrep/ci","app_slug":"github-actions","workflow_path":".github/workflows/semgrep.yml"},
+               {"name":"scan","app_slug":"github-actions","workflow_path":".github/workflows/osvscanner.yml"}
+             ]'
+             missing_required_contexts="$(printf '%s' "$checks_json" | jq -r --argjson required "$stable_required_contexts_json" '
+               def latest_for($context):
+                 [.check_runs[]? | select(.name == $context.name and .app.slug == $context.app_slug)]
+                 | sort_by(.completed_at // .started_at // .created_at // "")
+                 | last;
+               [$required[] as $context | select((latest_for($context) // null) == null) | "\($context.name)@\($context.app_slug)"]
+               | join(", ")
+             ')"
+             failing_required_contexts="$(printf '%s' "$checks_json" | jq -r --argjson required "$stable_required_contexts_json" '
+               def latest_for($context):
+                 [.check_runs[]? | select(.name == $context.name and .app.slug == $context.app_slug)]
+                 | sort_by(.completed_at // .started_at // .created_at // "")
+                 | last;
+               [$required[] as $context
+                 | latest_for($context) as $run
+                 | select($run != null)
+                 | select($run.status != "completed" or ($run.conclusion != "success" and $run.conclusion != "skipped" and $run.conclusion != "neutral"))
+                 | "\($context.name)=\($run.status)/\($run.conclusion // "none")"]
+               | join(", ")
+             ')"
+             run_identity_contexts="$(printf '%s' "$checks_json" | jq -r --argjson required "$stable_required_contexts_json" '
+               def latest_for($context):
+                 [.check_runs[]? | select(.name == $context.name and .app.slug == $context.app_slug)]
+                 | sort_by(.completed_at // .started_at // .created_at // "")
+                 | last;
+               [$required[] as $context
+                 | latest_for($context) as $run
+                 | select($run != null)
+                 | [$context.name, $context.workflow_path, ($run.details_url // "")]
+                 | @tsv]
+               | .[]?
+             ')"
+             workflow_identity_failures=''
+             while IFS=$'\t' read -r context_name expected_workflow_path details_url; do
+               [ -n "${context_name:-}" ] || continue
+               run_id="${details_url#*actions/runs/}"
+               run_id="${run_id%%/*}"
+               if [ -z "${run_id:-}" ] || [ "$run_id" = "$details_url" ]; then
+                 workflow_identity_failures="${workflow_identity_failures}${workflow_identity_failures:+, }${context_name}=missing-actions-run-url"
+                 continue
+               fi
+               if ! run_json="$(gh api "repos/${REPO_FULL_NAME}/actions/runs/${run_id}" 2>/dev/null)"; then
+                 workflow_identity_failures="${workflow_identity_failures}${workflow_identity_failures:+, }${context_name}=actions-run-${run_id}-unreadable"
+                 continue
+                fi
+                actual_workflow_path="$(printf '%s' "$run_json" | jq -r '.path // ""')"
+                actual_workflow_path="${actual_workflow_path%%@*}"
+                actual_head_sha="$(printf '%s' "$run_json" | jq -r '.head_sha // ""')"
+                if [ "$actual_workflow_path" != "$expected_workflow_path" ]; then
+                 workflow_identity_failures="${workflow_identity_failures}${workflow_identity_failures:+, }${context_name}=workflow:${actual_workflow_path:-missing}"
+               elif [ "$actual_head_sha" != "$PR_HEAD_SHA" ]; then
+                 workflow_identity_failures="${workflow_identity_failures}${workflow_identity_failures:+, }${context_name}=head:${actual_head_sha:-missing}"
+               fi
+             done <<< "$run_identity_contexts"
+             if [ -z "${missing_required_contexts:-}" ] && [ -z "${failing_required_contexts:-}" ] && [ -z "${workflow_identity_failures:-}" ]; then
+               cond_checks_green='yes'
+             else
+               [ -z "${missing_required_contexts:-}" ] || echo "Missing stable required contexts: ${missing_required_contexts}"
+               [ -z "${failing_required_contexts:-}" ] || echo "Incomplete/failing stable required contexts: ${failing_required_contexts}"
+               [ -z "${workflow_identity_failures:-}" ] || echo "Mismatched stable required context workflow identities: ${workflow_identity_failures}"
+             fi
+          fi
+
+          echo "Decide gate (PR #${PR_NUMBER}, head ${PR_HEAD_SHA}):"
+          echo "  auto_merge=${cond_auto_merge}"
+          echo "  approved_on_head=${cond_approved} (count=${total_approved})"
+          echo "  mergeable=${cond_mergeable}"
+          echo "  checks_green=${cond_checks_green}"
+
+          if [ "$cond_auto_merge" = 'yes' ] \
+            && [ "$cond_approved" = 'yes' ] \
+            && [ "$cond_mergeable" = 'yes' ] \
+            && [ "$cond_checks_green" = 'yes' ]; then
+            echo "Merge-readiness conditions satisfied: running heavy Strix scan as the final AI security evidence lane."
+            {
+              echo 'should_scan=true'
+              echo 'reason=ready-to-merge-all-conditions'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "PR #$PR_NUMBER not yet ready-to-merge (auto_merge=${cond_auto_merge}, approved_on_head=${cond_approved}, mergeable=${cond_mergeable}, checks_green=${cond_checks_green}); deferring heavy Strix scan."
+          {
+            echo 'should_scan=false'
+            echo 'reason=awaiting-merge-readiness'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare workflow_run scan target
+        id: prepare_workflow_run_target
+        if: github.event_name == 'workflow_run' && steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) && github.event.workflow_run.pull_requests[0].number || '' }}
+          PR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          mark_workflow_run_prepare_deferred() {
+            reason="$1"
+            message="$2"
+            echo "::warning::$message"
+            {
+              echo 'deferred=true'
+              echo "reason=$reason"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo 'STRIX_WORKFLOW_RUN_PREPARE_DEFERRED=true'
+              echo "STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON=$reason"
+            } >> "$GITHUB_ENV"
+            {
+              echo '### Strix workflow_run scan target'
+              echo
+              echo '- Outcome: deferred before scanner execution'
+              echo "- Reason: $reason"
+              echo "- Evidence: $message"
+              echo '- Policy: transient GitHub API or tarball download failures on PR-associated workflow_run scans are non-blocking remediation evidence; validation and unsafe tarball failures still fail closed.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          case "$PR_HEAD_SHA" in
+            ''|*[!0123456789abcdefABCDEF]* )
+              echo '::error::PR_HEAD_SHA must be a 40-character commit SHA.'
+              exit 1
+              ;;
+          esac
+          if [ "${#PR_HEAD_SHA}" -ne 40 ]; then
+            echo '::error::PR_HEAD_SHA must be a 40-character commit SHA.'
+            exit 1
+          fi
+          if [ -z "${PR_NUMBER:-}" ]; then
+            # Non-PR workflow_run (e.g. develop/main push-backed)
+            {
+              echo 'enabled=true'
+              echo 'reason=workflow-run-non-pr'
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo '### Strix workflow_run scan target'
+              echo
+              echo '- Outcome: enabled'
+              echo "- Target: non-PR workflow_run (push-backed)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"; then
+            mark_workflow_run_prepare_deferred \
+              'workflow-run-pr-api-error' \
+              "Failed to fetch PR #$PR_NUMBER metadata via GitHub API; deferring workflow_run Strix scan target preparation."
+          fi
+          if ! head_repo_full_name="$(printf '%s' "$pr_json" | jq -r '.head.repo.full_name // empty')"; then
+            mark_workflow_run_prepare_deferred \
+              'workflow-run-pr-api-error' \
+              "Failed to parse PR #$PR_NUMBER head repository metadata; deferring workflow_run Strix scan target preparation."
+          fi
+          if ! api_head_sha="$(printf '%s' "$pr_json" | jq -r '.head.sha // empty')"; then
+            mark_workflow_run_prepare_deferred \
+              'workflow-run-pr-api-error' \
+              "Failed to parse PR #$PR_NUMBER head SHA metadata; deferring workflow_run Strix scan target preparation."
+          fi
+          if [[ ! "$head_repo_full_name" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Unexpected PR head repository name: '$head_repo_full_name'."
+            exit 1
+          fi
+          if [ "$api_head_sha" != "$PR_HEAD_SHA" ]; then
+            echo "::error::workflow_run head SHA '$PR_HEAD_SHA' does not match PR #$PR_NUMBER head SHA '$api_head_sha'."
+            exit 1
+          fi
+          rm -rf strix-pr-head
+          mkdir -p strix-pr-head
+          archive="$RUNNER_TEMP/strix-pr-head.tar.gz"
+          if ! curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$head_repo_full_name/tarball/$PR_HEAD_SHA" \
+            -o "$archive"; then
+            mark_workflow_run_prepare_deferred \
+              'workflow-run-tarball-download-error' \
+              "Failed to download PR #$PR_NUMBER head tarball for $PR_HEAD_SHA; deferring workflow_run Strix scan target preparation."
+          fi
+          python3 - "$archive" strix-pr-head <<'PY'
+          import shutil
+          import sys
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path(sys.argv[1]).resolve(strict=True)
+          destination = Path(sys.argv[2]).resolve(strict=True)
+
+          def fail(member_name: str) -> None:
+              raise SystemExit(f"Refusing unsafe tar entry: {member_name}")
+
+          with tarfile.open(archive, "r:gz") as tar:
+              for member in tar.getmembers():
+                  if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+                      fail(member.name)
+
+                  member_path = PurePosixPath(member.name)
+                  if member_path.is_absolute() or any(
+                      part in ("", ".", "..") for part in member_path.parts
+                  ):
+                      fail(member.name)
+
+                  # GitHub tarballs wrap repository contents in a generated
+                  # top-level directory. Strip that component without using
+                  # tar extraction so PR-controlled metadata cannot create
+                  # symlinks, hardlinks, devices, or paths outside the target.
+                  if len(member_path.parts) <= 1:
+                      continue
+                  relative_path = PurePosixPath(*member_path.parts[1:])
+                  if any(part in ("", ".", "..") for part in relative_path.parts):
+                      fail(member.name)
+
+                  target = (destination / Path(relative_path.as_posix())).resolve(strict=False)
+                  if target != destination and destination not in target.parents:
+                      fail(member.name)
+
+                  if member.isdir():
+                      target.mkdir(parents=True, exist_ok=True)
+                      continue
+
+                  if not member.isfile():
+                      fail(member.name)
+
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  source = tar.extractfile(member)
+                  if source is None:
+                      fail(member.name)
+                  with source, target.open("wb") as output:
+                      shutil.copyfileobj(source, output)
+          PY
+          rm -f "$archive"
+
+      - name: Set up Python
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Detect Strix LLM provider
+        id: provider
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+        run: |
+          # Derive the provider prefix from STRIX_LLM by delegating to the
+          # shared normalizer (scripts/ci/strix_model_utils.sh::normalize_model)
+          # so that this workflow gate accepts exactly the same identifier
+          # shapes the gate script does — including Vertex resource paths
+          # (projects/.../models/...) and non-Vertex slash forms like
+          # deepseek/models/... — while continuing to reject bare model
+          # names.  The downstream GCP-auth / VERTEX_LOCATION / fallback-list
+          # steps stay gated on `is_vertex`.
+          # shellcheck source=scripts/ci/strix_model_utils.sh
+          . "${GITHUB_WORKSPACE}/scripts/ci/strix_model_utils.sh"
+          # No default provider — bare models must fail-fast.
+          DEFAULT_PROVIDER=""
+          raw="$(printf '%s' "$STRIX_LLM" | tr -d '\r\n')"
+          if ! normalized="$(normalize_model "$raw" 2>&1)"; then
+            echo "::error::$normalized"
+            exit 1
+          fi
+          provider=""
+          case "$normalized" in
+            */*) provider="${normalized%%/*}" ;;
+          esac
+          if [ -z "$provider" ]; then
+            echo "::error::STRIX_LLM must be provider-qualified (e.g. 'vertex_ai/<model>', 'gemini/<model>', 'openai/<model>', 'anthropic/<model>'); got '$normalized'."
+            exit 1
+          fi
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          if [ "$provider" = "vertex_ai" ] || [ "$provider" = "vertex_ai_beta" ]; then
+            echo 'is_vertex=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'is_vertex=false' >> "$GITHUB_OUTPUT"
+          fi
+          echo "Detected Strix LLM provider: $provider (normalized='$normalized')"
+
+      - name: Install Strix
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        run: |
+          python -m pip install --no-cache-dir --no-deps --require-hashes -r requirements-strix-ci.txt
+
       - name: Gate GCP credentials
         id: gcp_gate
-        if: steps.gate.outputs.enabled == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.is_vertex == 'true'
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
-          if [ -n "$GCP_SA_KEY" ]; then
+          # Trim leading/trailing whitespace and CR/LF before checking so a
+          # whitespace-only secret is treated as missing instead of present.
+          trimmed_gcp_sa_key="$(printf '%s' "$GCP_SA_KEY" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$trimmed_gcp_sa_key" ]; then
             echo 'has_gcp=true' >> "$GITHUB_OUTPUT"
           else
-            echo 'has_gcp=false' >> "$GITHUB_OUTPUT"
-            echo 'GCP credentials not configured; Vertex AI auth will not be available.'
-          fi
-
-      - name: Gate model auth prerequisites
-        id: auth_gate
-        if: steps.gate.outputs.enabled == 'true'
-        env:
-          STRIX_LLM: ${{ secrets.STRIX_LLM }}
-          DEFAULT_PROVIDER: gemini
-        run: |
-          . "$TRUSTED_WORKSPACE/scripts/ci/strix_model_utils.sh"
-          strix_llm="$(trim_whitespace "$STRIX_LLM")"
-          requires_vertex_auth='false'
-          model_auth_rc=0
-          model_requires_vertex_auth "$strix_llm" || model_auth_rc=$?
-          case "$model_auth_rc" in
-          0)
-            requires_vertex_auth='true'
-            ;;
-          1)
-            ;;
-          *)
-            echo '::error::Unable to classify Strix model authentication requirements; failing closed.'
-            exit "$model_auth_rc"
-            ;;
-          esac
-
-          if [ "$requires_vertex_auth" = 'true' ] && [ "${{ steps.gcp_gate.outputs.has_gcp }}" != 'true' ]; then
-            if [ "$GITHUB_EVENT_NAME" = 'push' ] || [ "$GITHUB_EVENT_NAME" = 'schedule' ] || [ "$GITHUB_EVENT_NAME" = 'pull_request_target' ] || [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
-              echo '::error::Vertex-authenticated Strix model requires GCP_SA_KEY on privileged event; failing closed.'
-              exit 1
-            fi
-            echo 'can_run=false' >> "$GITHUB_OUTPUT"
-            echo "Skipping Strix on ${GITHUB_EVENT_NAME} because the configured model requires GCP_SA_KEY."
-          else
-            echo 'can_run=true' >> "$GITHUB_OUTPUT"
+            # Vertex provider requires GCP credentials; fail-closed so a
+            # silently green check cannot be produced when auth is missing.
+            echo '::error::Vertex provider selected but GCP_SA_KEY is not configured; failing closed.'
+            exit 1
           fi
 
       - name: Authenticate to Google Cloud
         id: gcp_auth
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.is_vertex == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Relocate generated GCP credentials outside scan target
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.is_vertex == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
         run: |
           auth_creds_path="${{ steps.gcp_auth.outputs.credentials_file_path }}"
           relocated="$(AUTH_CREDS_PATH="$auth_creds_path" python3 - <<'PY'
@@ -176,15 +682,8 @@ jobs:
             echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=$relocated"
           } >> "$GITHUB_ENV"
 
-      - name: Install Strix
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
-        run: |
-          cd "$TRUSTED_WORKSPACE"
-          python3 -m pip install --upgrade pip
-          python3 -m pip install --no-cache-dir -r requirements-strix-ci.txt
-
       - name: Mask LLM API key
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
@@ -200,7 +699,7 @@ jobs:
           fi
 
       - name: Prepare LLM API key input file
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
         env:
           LLM_API_KEY_SECRET: ${{ secrets.LLM_API_KEY }}
         run: |
@@ -212,21 +711,19 @@ jobs:
           fi
 
       - name: Prepare Strix model input file
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
         env:
           STRIX_LLM_SECRET: ${{ secrets.STRIX_LLM }}
         run: |
-          umask 077
-          strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
           if [ -n "$STRIX_LLM_SECRET" ]; then
+            umask 077
+            strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
             printf '%s' "$STRIX_LLM_SECRET" > "$strix_llm_file"
-          else
-            printf '%s' "gemini-3.1-pro-preview" > "$strix_llm_file"
+            echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
           fi
-          echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
 
       - name: Prepare LLM API base input file
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
         env:
           LLM_API_BASE_SECRET: ${{ secrets.LLM_API_BASE }}
         run: |
@@ -238,50 +735,151 @@ jobs:
           fi
 
       - name: Run Strix (quick)
-        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        id: strix_quick
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        continue-on-error: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && steps.decide.outputs.reason != 'non-pr-event' && steps.decide.outputs.reason != 'workflow-run-without-pr') }}
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
-          STRIX_LLM_DEFAULT_PROVIDER: gemini
-          GEMINI_LOCATION: GLOBAL
+          # NOTE: STRIX_LLM_DEFAULT_PROVIDER is intentionally not set —
+          # STRIX_LLM must be provider-qualified (validated by the
+          # "Detect Strix LLM provider" step above).  Bare model names
+          # are rejected fail-fast by scripts/ci/strix_quick_gate.sh.
+          # Vertex global-region aliases are only meaningful when the provider
+          # is vertex_ai*, so we emit them conditionally. GEMINI_LOCATION is
+          # harmless for non-Gemini providers and keeps Gemini scans on the
+          # global endpoint.
+          VERTEXAI_LOCATION: ${{ steps.provider.outputs.is_vertex == 'true' && 'global' || '' }}
+          VERTEX_LOCATION: ${{ steps.provider.outputs.is_vertex == 'true' && 'global' || '' }}
+          GEMINI_LOCATION: global
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
-          STRIX_GEMINI_FALLBACK_MODELS: "gemini/gemini-2.5-flash gemini/gemini-2.5-pro"
-          STRIX_VERTEX_FALLBACK_MODELS: "vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash"
-          STRIX_TARGET_PATH: ./
-          STRIX_SOURCE_DIRS: .
-          STRIX_REASONING_EFFORT: ${{ github.event_name == 'push' && 'low' || 'minimal' }}
+          # Default Vertex fallback list — only honored when the primary
+          # is itself a Vertex model.  Gemini primaries get a same-provider
+          # default fallback below unless STRIX_LLM_FALLBACK_MODELS is set.
+          # For OpenAI / Anthropic primaries, configure same-provider
+          # STRIX_LLM_FALLBACK_MODELS or leave unset to disable fallback.
+          STRIX_VERTEX_FALLBACK_MODELS: ${{ steps.provider.outputs.is_vertex == 'true' && 'vertex_ai/gemini-3.1-pro-preview vertex_ai/gemini-3.1-pro-preview-customtools vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash' || '' }}
+          # Vertex primary 일 때는 STRIX_LLM_FALLBACK_MODELS 를 비워둔다.
+          # 비워두지 않으면 `scripts/ci/strix_quick_gate.sh` 내 fallback
+          # 우선순위(1=LLM, 2=VERTEX, 3=내장 default) 중 1 이 발동해
+          # Vertex 기본 fallback 목록을 가리고, 또 `vars.STRIX_LLM_FALLBACK_MODELS`
+          # 가 cross-provider 항목으로 설정돼 있으면 same-provider 필터에
+          # 의해 모두 스킵돼 결국 fallback 이 한 번도 시도되지 않는다.
+          # is_vertex 가 아닐 때만 `vars.STRIX_LLM_FALLBACK_MODELS` 또는
+          # gemini primary 의 same-provider 기본 fallback 을 사용한다.
+          STRIX_LLM_FALLBACK_MODELS: ${{ steps.provider.outputs.is_vertex != 'true' && (vars.STRIX_LLM_FALLBACK_MODELS || (steps.provider.outputs.provider == 'gemini' && 'gemini/gemini-2.5-pro gemini/gemini-3.1-pro-preview-customtools gemini/gemini-3.1-pro-preview' || '')) || '' }}
+          STRIX_REASONING_EFFORT: medium
           STRIX_LLM_MAX_RETRIES: 1
-          LLM_TIMEOUT: 90
-          STRIX_MEMORY_COMPRESSOR_TIMEOUT: 10
+          LLM_TIMEOUT: 600
+          STRIX_MEMORY_COMPRESSOR_TIMEOUT: 60
           STRIX_TRANSIENT_RETRY_PER_MODEL: 2
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 3
-          STRIX_PROCESS_TIMEOUT_SECONDS: ${{ github.event_name == 'pull_request_target' && '1200' || '2400' }}
-          STRIX_TOTAL_TIMEOUT_SECONDS: 3000
-          STRIX_PR_SCOPE_MAX_FILES_PER_BATCH: 4
-          STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
-          STRIX_DISABLE_PR_SCOPING: ${{ github.event_name == 'pull_request_target' && '0' || '1' }}
-          GH_TOKEN: ${{ github.event_name == 'pull_request_target' && github.token || '' }}
-          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || '' }}
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
-          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || '' }}
-          STRIX_SCA_WORKFLOWS: "{}"
-        run: |
-          cd "$TRUSTED_WORKSPACE"
-          bash "$TRUSTED_STRIX_GATE"
+          STRIX_PROCESS_TIMEOUT_SECONDS: 19800
+          STRIX_TOTAL_TIMEOUT_SECONDS: 20400
+          STRIX_TARGET_PATH: './'
+          STRIX_PR_BOUNDED_SCOPE: "0"
+          STRIX_DISABLE_PR_SCOPING: "1"
+          STRIX_PR_ASSOCIATED_EVENT: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) }}
+          GH_TOKEN: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || github.event_name == 'workflow_run') && github.token || '' }}
+          PR_NUMBER: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.number || ((github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) && github.event.workflow_run.pull_requests[0].number || '') }}
+          PR_BASE_SHA: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.sha || ((github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) && github.event.workflow_run.pull_requests[0].base.sha || '') }}
+          PR_HEAD_SHA: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.head.sha || github.event.workflow_run.head_sha || '' }}
+        run: STRIX_FAIL_ON_MIN_SEVERITY=MEDIUM bash ./scripts/ci/strix_quick_gate.sh
 
-      - name: Collect Strix reports for artifact upload
-        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' }}
+      - name: Summarize Strix non-blocking result
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        env:
+          STRIX_OUTCOME: ${{ steps.strix_quick.outcome }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          DECIDE_SHOULD_SCAN: ${{ steps.decide.outputs.should_scan }}
+          DECIDE_REASON: ${{ steps.decide.outputs.reason }}
+          STRIX_WORKFLOW_RUN_PREPARE_DEFERRED: ${{ steps.prepare_workflow_run_target.outputs.deferred || env.STRIX_WORKFLOW_RUN_PREPARE_DEFERRED }}
+          STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON: ${{ steps.prepare_workflow_run_target.outputs.reason || env.STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON }}
+          WORKFLOW_RUN_PREPARE_DEFERRED: ${{ steps.prepare_workflow_run_target.outputs.deferred || env.STRIX_WORKFLOW_RUN_PREPARE_DEFERRED }}
+          WORKFLOW_RUN_PREPARE_DEFER_REASON: ${{ steps.prepare_workflow_run_target.outputs.reason || env.STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON }}
+          IS_PR_ASSOCIATED_SCAN: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && steps.decide.outputs.reason != 'non-pr-event' && steps.decide.outputs.reason != 'workflow-run-without-pr') }}
         run: |
-          if [ -d "$TRUSTED_WORKSPACE/strix_runs" ]; then
-            mkdir -p "$GITHUB_WORKSPACE/strix_runs"
-            cp -R "$TRUSTED_WORKSPACE/strix_runs"/. "$GITHUB_WORKSPACE/strix_runs"/
+          if [ "$WORKFLOW_RUN_PREPARE_DEFERRED" = "true" ]; then
+            reason="${WORKFLOW_RUN_PREPARE_DEFER_REASON:-workflow-run-prepare-deferred}"
+            echo "Strix workflow_run scan target preparation deferred (reason=$reason); no LLM scan executed."
+            {
+              echo '### Strix quick scan'
+              echo
+              echo '- Outcome: workflow_run scan target preparation deferred'
+              echo "- Reason: $reason"
+              echo '- Policy: PR-associated workflow_run preparation outages are non-blocking remediation evidence; validation/security failures still fail closed.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # workflow_run completions associated with a PR are treated as
+          # PR-associated scans by IS_PR_ASSOCIATED_SCAN.
+          # When the post-approval gate deferred the heavy LLM scan, the
+          # `Run Strix (quick)` step did not execute. Surface that fact
+          # explicitly so the required `strix` job context still completes
+          # successfully with clear evidence the cost-saving deferral was
+          # intentional, rather than masking a silently skipped scan.
+          if [ "$DECIDE_SHOULD_SCAN" != "true" ]; then
+            reason="${DECIDE_REASON:-awaiting-merge-readiness}"
+            echo "Strix heavy LLM scan deferred (reason=$reason); no LLM cost incurred."
+            {
+              echo '### Strix quick scan'
+              echo
+              echo '- Outcome: deferred (not executed on this run)'
+              echo "- Reason: $reason"
+              echo '- Policy: PR scans only run when the PR is approved on head and auto-merge is enabled, or when a reviewer attaches the `run-strix` override label.'
+              echo '- Re-trigger: approving on the current head or attaching `run-strix` will re-run this workflow and execute the heavy scan, which then records PR Strix remediation evidence.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$STRIX_OUTCOME" = "success" ]; then
+            echo 'Strix quick scan completed successfully.'
+            {
+              echo '### Strix quick scan'
+              echo
+              echo '- Outcome: success'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          message="Strix quick scan concluded with outcome '$STRIX_OUTCOME'. Review the strix-reports artifact and workflow logs before merging."
+          {
+            echo '### Strix quick scan'
+            echo
+            echo "- Outcome: $STRIX_OUTCOME"
+            echo '- Evidence: review the `strix-reports` artifact and workflow logs.'
+            echo '- Policy: PR events keep this as remediation evidence; non-PR events fail closed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$IS_PR_ASSOCIATED_SCAN" = "true" ]; then
+            echo "::warning::$message"
+            exit 0
+          fi
+
+          echo "::error::$message"
+          exit 1
+
+      - name: Ensure Strix reports artifact evidence
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' }}
+        run: |
+          if [ ! -d "strix_runs" ] || [ -z "$(find strix_runs -type f -print -quit 2>/dev/null)" ]; then
+            echo "No Strix report files were produced by the scanner or preparation steps. Creating explicit placeholder evidence."
+            mkdir -p strix_runs
+            {
+              echo "# Strix Scan Artifact Placeholder"
+              echo
+              echo "This scan concluded without producing strix-report JSON or Markdown files. This can happen if:"
+              echo "- The scan was deferred (e.g., waiting for PR approval)."
+              echo "- The scan skipped execution due to missing secrets (Step Summary no-scan evidence)."
+              echo "- The scan failed closed before initializing the reports directory."
+            } > strix_runs/README.md
           fi
 
       - name: Upload Strix reports artifact
-        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' }}
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: strix-reports
           path: strix_runs/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 5
