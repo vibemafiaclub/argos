@@ -74,7 +74,8 @@ normalize_model() {
 	local model
 	model="$(trim_whitespace "${1-}")"
 	if [ -z "$model" ]; then
-		return 0
+		echo "ERROR: Model identifier cannot be empty." >&2
+		return 1
 	fi
 
 	if is_vertex_resource_path "$model"; then
