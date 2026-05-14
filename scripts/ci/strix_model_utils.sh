@@ -8,8 +8,8 @@ trim_whitespace() {
 	# Collapse only the leading/trailing shell whitespace that can be introduced by
 	# secret files or workflow inputs. Internal spacing remains meaningful for the
 	# few callers that parse lists after trimming each token.
-	value="${value#"${value%%[!$space]*}"}"
-	value="${value%"${value##*[!$space]}"}"
+	value="${value#"${value%%[!"$space"]*}"}"
+	value="${value%"${value##*[!"$space"]}"}"
 	printf '%s\n' "$value"
 }
 
