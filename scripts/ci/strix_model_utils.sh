@@ -31,6 +31,12 @@ validate_model_identifier() {
 		echo "ERROR: model identifier must not be empty." >&2
 		return 2
 	fi
+	case "$identifier" in
+	/* | */ | *//*)
+		echo "ERROR: model identifier '$identifier' contains unsupported characters." >&2
+		return 2
+		;;
+	esac
 
 	local segment
 	local -a _model_segments
@@ -46,9 +52,16 @@ validate_model_identifier() {
 }
 
 is_provider_qualified_model() {
-	case "$1" in
-	vertex_ai/* | vertex_ai_beta/* | openai/* | anthropic/* | azure/* | gemini/* | bedrock/* | groq/* | mistral/* | cohere/* | ollama/* | huggingface/* | xai/*)
-		return 0
+	local model="$1"
+	local provider
+	provider="$(extract_model_provider "$model")" || return 1
+	if [ -z "${model#*/}" ]; then
+		return 1
+	fi
+	case "$provider" in
+	vertex_ai | vertex_ai_beta | openai | anthropic | azure | gemini | bedrock | groq | mistral | cohere | ollama | huggingface | xai)
+		validate_model_identifier "$model" >/dev/null
+		return $?
 		;;
 	*)
 		return 1
@@ -86,10 +99,16 @@ model_requires_gcp_credentials() {
 }
 
 model_requires_llm_api_key() {
-	if is_vertex_model "$1"; then
+	local provider
+	provider="$(extract_model_provider "$1")" || return 0
+	case "$provider" in
+	vertex_ai | vertex_ai_beta | ollama)
 		return 1
-	fi
-	return 0
+		;;
+	*)
+		return 0
+		;;
+	esac
 }
 
 is_vertex_resource_path() {

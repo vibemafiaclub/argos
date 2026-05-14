@@ -5049,6 +5049,32 @@ RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE=1 run_gate_case "success" \
 	"" \
 	""
 
+# Provider-qualified models must include a non-empty model suffix.  A value
+# like `openai/` previously bypassed provider qualification and then slipped
+# through generic identifier validation because Bash drops trailing empty array
+# elements when splitting on `/`.
+run_gate_case "success" \
+	"openai/" \
+	"" \
+	"2" \
+	"model identifier 'openai/' contains unsupported characters" \
+	"0" \
+	"" \
+	""
+
+# Local Ollama models do not authenticate with LLM_API_KEY.  Omitting the API
+# key file should still allow the scan to run with the normalized ollama model.
+RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE=1 run_gate_case "success" \
+	"ollama/llama3.1" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'ollama/llama3.1'" \
+	"1" \
+	"ollama/llama3.1" \
+	"<unset>" \
+	"vertex_ai" \
+	""
+
 # Global-region aliases must be forwarded only through the curated child
 # environment.  These regressions prove Vertex aliases and Gemini's harmless
 # alias reach the Strix subprocess while unrelated parent secrets do not leak.
