@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run OSV-Scanner
-        uses: google/osv-scanner-action/osv-scanner-action@v2
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.8
         with:
           scan-args: |-
             --recursive
