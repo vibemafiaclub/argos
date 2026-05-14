@@ -190,9 +190,25 @@ evaluate 두 결과 + ADR 완료까지 모두 join 되면 메인이 사용자에
 - 사용자가 "1,3 반영" 같이 답하면 **메인 세션이 직접** 해당 이슈를 처리 (가장 깊은 컨텍스트가 메인이므로 — 별도 세션 띄우지 말 것).
 - 사용자가 "스킵" / "다 무시" / "끝" 하면 다음 단계로.
 
+## Step 6 — UC 카탈로그 승격 (foreground)
+
+사용자 이슈 반영(또는 스킵) 직후, 메인이 UC 승격 sub-agent 를 **foreground** 로 호출한다. background 가 아닌 이유: NEW vs UPDATE vs SUPERSEDE 판정에 메인의 1~2줄 답이 필요할 수 있고, 이 단계 이후 곧장 세션 종료이기 때문.
+
+```
+Agent({
+  subagent_type: "new-task-usecase",
+  prompt: task_slug, clarify_path, plan_path, evaluate_path 전달
+})
+```
+
+- 산출: `docs/usecases/<domain>/UC-<DOMAIN>-NNN-...md` (신규) 또는 기존 UC 본문 업데이트, `docs/usecases/_ids.yaml` 갱신.
+- 메인은 5~10줄 요약만 받는다 (어떤 UC 가 NEW/UPDATE/SUPERSEDE 됐는지 + 미해결 질문).
+- sub-agent 가 분류 모호함을 메인에 물으면 메인이 사용자에게 한 줄로 옮겨 답을 받아 sub-agent 를 followup 호출.
+- 카탈로그 규약 (`docs/usecases/README.md`) 의 시나리오 단계 작성 규칙은 sub-agent 가 알아서 lint·수정.
+
 ## 파이프라인 자기개선 (background, 마지막)
 
-사용자 결정(반영 또는 스킵)이 끝난 직후, 메인이 background sub-agent 를 띄운다:
+UC 승격이 끝난 직후, 메인이 background sub-agent 를 띄운다:
 
 ```
 Agent({
@@ -226,6 +242,8 @@ docs/tasks/<slug>/
   05-qa.md
   _pipeline-improvements.md    # background 산출
 docs/adr.md                    # ADR append
+docs/usecases/<domain>/UC-*.md # UC 승격으로 생성/갱신
+docs/usecases/_ids.yaml        # UC 레지스트리 갱신
 .claude/state/active-task      # 진행 중일 때만 존재
 ```
 

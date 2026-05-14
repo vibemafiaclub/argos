@@ -1,0 +1,21 @@
+# Argos UC Registry
+#
+# 단일 진실: 각 UC .md 의 frontmatter 가 authoritative.
+# 이 파일은 (a) next-id 카운터 와 (b) 빠른 lookup 캐시 역할.
+# .claude/agents/new-task-usecase.md 가 자동 유지하며, 수동 수정도 허용된다.
+#
+# 규칙:
+# - 새 UC 추가 시 next_id.<DOMAIN> 의 값을 그 UC 에 할당하고 next_id 를 +1 한다.
+# - ID 는 재발급 금지. deprecated UC 도 entry 를 유지하고 status: deprecated 로만 표시.
+# - 새 도메인 추가 시 next_id 에 prefix 를 추가하면서 docs/usecases/<domain>/ 폴더를 만든다.
+
+next_id:
+  ORG: 1
+  PROJ: 1
+  SESS: 1
+  CLI: 1
+  BILL: 1
+  AUTH: 1
+  SHARED: 1  # _shared/ 폴더의 subfunction UC 용. 도메인 prefix 는 SHARED.
+
+usecases: {}
