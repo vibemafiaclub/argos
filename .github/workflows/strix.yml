@@ -69,7 +69,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # workflow_run is privileged and may be triggered by a PR head.
+          # Keep the executable workflow/scripts on the trusted default branch;
+          # PR-head code is downloaded later as data into ./strix-pr-head.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.repository.default_branch || github.sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -101,6 +104,7 @@ jobs:
           WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
           WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
+          # shellcheck disable=SC2016 # Markdown literals intentionally use backticks.
           strix_llm="$(printf '%s' "$STRIX_LLM" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           llm_api_key="$(printf '%s' "$LLM_API_KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           write_strix_missing_secret_summary() {
@@ -114,7 +118,7 @@ jobs:
                 echo '- Outcome: skipped before scanner execution'
               fi
               echo '- Reason: required Strix secrets are not configured'
-              echo '- Missing configuration: `STRIX_LLM` and/or `LLM_API_KEY` GitHub secrets'
+              echo "- Missing configuration: \`STRIX_LLM\` and/or \`LLM_API_KEY\` GitHub secrets"
               echo '- Policy: PR missing-secret runs produce explicit no-scan evidence; protected branch and manual security scans fail closed.'
             } >> "$GITHUB_STEP_SUMMARY"
           }
@@ -472,41 +476,34 @@ jobs:
             exit 1
           fi
           if [ -z "${PR_NUMBER:-}" ]; then
-            # Non-PR workflow_run (e.g. develop/main push-backed)
-            {
-              echo 'enabled=true'
-              echo 'reason=workflow-run-non-pr'
-            } >> "$GITHUB_OUTPUT"
-            {
-              echo '### Strix workflow_run scan target'
-              echo
-              echo '- Outcome: enabled'
-              echo "- Target: non-PR workflow_run (push-backed)"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if ! pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"; then
-            mark_workflow_run_prepare_deferred \
-              'workflow-run-pr-api-error' \
-              "Failed to fetch PR #$PR_NUMBER metadata via GitHub API; deferring workflow_run Strix scan target preparation."
-          fi
-          if ! head_repo_full_name="$(printf '%s' "$pr_json" | jq -r '.head.repo.full_name // empty')"; then
-            mark_workflow_run_prepare_deferred \
-              'workflow-run-pr-api-error' \
-              "Failed to parse PR #$PR_NUMBER head repository metadata; deferring workflow_run Strix scan target preparation."
-          fi
-          if ! api_head_sha="$(printf '%s' "$pr_json" | jq -r '.head.sha // empty')"; then
-            mark_workflow_run_prepare_deferred \
-              'workflow-run-pr-api-error' \
-              "Failed to parse PR #$PR_NUMBER head SHA metadata; deferring workflow_run Strix scan target preparation."
-          fi
-          if [[ ! "$head_repo_full_name" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::Unexpected PR head repository name: '$head_repo_full_name'."
-            exit 1
-          fi
-          if [ "$api_head_sha" != "$PR_HEAD_SHA" ]; then
-            echo "::error::workflow_run head SHA '$PR_HEAD_SHA' does not match PR #$PR_NUMBER head SHA '$api_head_sha'."
-            exit 1
+            # Non-PR workflow_run (e.g. develop/main push-backed): keep the
+            # checked-out scripts trusted, but scan the completed run SHA as
+            # data from a tarball, same as PR-associated workflow_run scans.
+            head_repo_full_name="$GITHUB_REPOSITORY"
+          else
+            if ! pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"; then
+              mark_workflow_run_prepare_deferred \
+                'workflow-run-pr-api-error' \
+                "Failed to fetch PR #$PR_NUMBER metadata via GitHub API; deferring workflow_run Strix scan target preparation."
+            fi
+            if ! head_repo_full_name="$(printf '%s' "$pr_json" | jq -r '.head.repo.full_name // empty')"; then
+              mark_workflow_run_prepare_deferred \
+                'workflow-run-pr-api-error' \
+                "Failed to parse PR #$PR_NUMBER head repository metadata; deferring workflow_run Strix scan target preparation."
+            fi
+            if ! api_head_sha="$(printf '%s' "$pr_json" | jq -r '.head.sha // empty')"; then
+              mark_workflow_run_prepare_deferred \
+                'workflow-run-pr-api-error' \
+                "Failed to parse PR #$PR_NUMBER head SHA metadata; deferring workflow_run Strix scan target preparation."
+            fi
+            if [[ ! "$head_repo_full_name" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+              echo "::error::Unexpected PR head repository name: '$head_repo_full_name'."
+              exit 1
+            fi
+            if [ "$api_head_sha" != "$PR_HEAD_SHA" ]; then
+              echo "::error::workflow_run head SHA '$PR_HEAD_SHA' does not match PR #$PR_NUMBER head SHA '$api_head_sha'."
+              exit 1
+            fi
           fi
           rm -rf strix-pr-head
           mkdir -p strix-pr-head
@@ -572,6 +569,17 @@ jobs:
                       shutil.copyfileobj(source, output)
           PY
           rm -f "$archive"
+          {
+            echo 'enabled=true'
+            echo 'reason=workflow-run-tarball-target-prepared'
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '### Strix workflow_run scan target'
+            echo
+            echo '- Outcome: enabled'
+            echo "- Target: $head_repo_full_name@$PR_HEAD_SHA extracted to ./strix-pr-head"
+            echo '- Policy: workflow_run executes trusted default-branch scripts and scans completed-run code as data.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Python
         if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
@@ -776,7 +784,7 @@ jobs:
           STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 3
           STRIX_PROCESS_TIMEOUT_SECONDS: 19800
           STRIX_TOTAL_TIMEOUT_SECONDS: 20400
-          STRIX_TARGET_PATH: './'
+          STRIX_TARGET_PATH: ${{ github.event_name == 'workflow_run' && './strix-pr-head' || './' }}
           STRIX_PR_BOUNDED_SCOPE: "0"
           STRIX_DISABLE_PR_SCOPING: "1"
           STRIX_PR_ASSOCIATED_EVENT: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) }}
@@ -799,6 +807,7 @@ jobs:
           WORKFLOW_RUN_PREPARE_DEFER_REASON: ${{ steps.prepare_workflow_run_target.outputs.reason || env.STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON }}
           IS_PR_ASSOCIATED_SCAN: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && steps.decide.outputs.reason != 'non-pr-event' && steps.decide.outputs.reason != 'workflow-run-without-pr') }}
         run: |
+          # shellcheck disable=SC2016 # Markdown literals intentionally use backticks.
           if [ "$WORKFLOW_RUN_PREPARE_DEFERRED" = "true" ]; then
             reason="${WORKFLOW_RUN_PREPARE_DEFER_REASON:-workflow-run-prepare-deferred}"
             echo "Strix workflow_run scan target preparation deferred (reason=$reason); no LLM scan executed."
@@ -827,8 +836,8 @@ jobs:
               echo
               echo '- Outcome: deferred (not executed on this run)'
               echo "- Reason: $reason"
-              echo '- Policy: PR scans only run when the PR is approved on head and auto-merge is enabled, or when a reviewer attaches the `run-strix` override label.'
-              echo '- Re-trigger: approving on the current head or attaching `run-strix` will re-run this workflow and execute the heavy scan, which then records PR Strix remediation evidence.'
+              echo "- Policy: PR scans only run when the PR is approved on head and auto-merge is enabled, or when a reviewer attaches the \`run-strix\` override label."
+              echo "- Re-trigger: approving on the current head or attaching \`run-strix\` will re-run this workflow and execute the heavy scan, which then records PR Strix remediation evidence."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -848,7 +857,7 @@ jobs:
             echo '### Strix quick scan'
             echo
             echo "- Outcome: $STRIX_OUTCOME"
-            echo '- Evidence: review the `strix-reports` artifact and workflow logs.'
+            echo "- Evidence: review the \`strix-reports\` artifact and workflow logs."
             echo '- Policy: PR events keep this as remediation evidence; non-PR events fail closed.'
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$IS_PR_ASSOCIATED_SCAN" = "true" ]; then
