@@ -33,6 +33,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/new-task-record.py"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
@@ -40,6 +51,10 @@
           {
             "type": "command",
             "command": "argos hook"
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/new-task-record.py"
           }
         ]
       }

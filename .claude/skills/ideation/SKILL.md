@@ -108,7 +108,7 @@ echo "HEADLESS=${HARNESS_HEADLESS:-${BET_HEADLESS:-0}}"
    - 구현 스케치
    - CTO 승인 조건부 조건 (있으면)
    - 시뮬 `run_id`
-2. 사용자에게 다음 행동을 제안: "`plan-and-build` skill로 바로 구현 계획 작성으로 넘어갈까요?"
+2. 사용자에게 다음 행동을 제안: "`/new-task` 로 바로 구현 파이프라인을 시작할까요?"
 
 ## 호출 규칙 요약
 
