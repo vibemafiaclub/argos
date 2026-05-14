@@ -56,6 +56,42 @@ is_provider_qualified_model() {
 	esac
 }
 
+# Extract the provider prefix from a provider-qualified model identifier
+# (e.g. "openai/gpt-5" → "openai", "vertex_ai/gemini-2.5-pro" → "vertex_ai").
+# Returns 1 (and prints nothing) for bare/unqualified inputs.
+extract_model_provider() {
+	local model="$1"
+	case "$model" in
+	*/*)
+		printf '%s\n' "${model%%/*}"
+		return 0
+		;;
+	esac
+	return 1
+}
+
+is_vertex_model() {
+	case "$1" in
+	vertex_ai/* | vertex_ai_beta/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+model_requires_gcp_credentials() {
+	is_vertex_model "$1"
+}
+
+model_requires_llm_api_key() {
+	if is_vertex_model "$1"; then
+		return 1
+	fi
+	return 0
+}
+
 is_vertex_resource_path() {
 	# Validate Vertex AI resource path formats with strict segment-boundary
 	# enforcement. We split on '/' using `read -ra` (shellcheck-safe) to reject

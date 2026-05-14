@@ -96,18 +96,16 @@ jobs:
       - name: Self-test Strix gate script
         run: bash ./scripts/ci/test_strix_quick_gate.sh
 
-      - name: Gate Strix secrets
+      - name: Gate Strix model secret
         id: gate
         env:
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
           WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           # shellcheck disable=SC2016 # Markdown literals intentionally use backticks.
           strix_llm="$(printf '%s' "$STRIX_LLM" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          llm_api_key="$(printf '%s' "$LLM_API_KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          write_strix_missing_secret_summary() {
+          write_strix_missing_model_summary() {
             outcome="$1"
             {
               echo '### Strix quick scan'
@@ -117,12 +115,12 @@ jobs:
               else
                 echo '- Outcome: skipped before scanner execution'
               fi
-              echo '- Reason: required Strix secrets are not configured'
-              echo "- Missing configuration: \`STRIX_LLM\` and/or \`LLM_API_KEY\` GitHub secrets"
+              echo '- Reason: required Strix model secret is not configured'
+              echo "- Missing configuration: \`STRIX_LLM\` GitHub secret"
               echo '- Policy: PR missing-secret runs produce explicit no-scan evidence; protected branch and manual security scans fail closed.'
             } >> "$GITHUB_STEP_SUMMARY"
           }
-          if [ -z "$strix_llm" ] || [ -z "$llm_api_key" ]; then
+          if [ -z "$strix_llm" ]; then
             # On protected-branch scans (direct schedule or push-backed
             # workflow_run), fail closed: missing secrets must not silently
             # produce a green check. Manual workflow_dispatch scans are
@@ -135,13 +133,13 @@ jobs:
               is_fail_closed='true'
             fi
             if [ "$is_fail_closed" = 'true' ]; then
-              write_strix_missing_secret_summary 'fail-closed'
-              echo '::error::Strix secrets not configured on protected/manual event; failing closed before scanner execution.'
+              write_strix_missing_model_summary 'fail-closed'
+              echo '::error::STRIX_LLM is not configured on protected/manual event; failing closed before scanner execution.'
               exit 1
             fi
-            write_strix_missing_secret_summary 'skipped'
+            write_strix_missing_model_summary 'skipped'
             echo 'enabled=false' >> "$GITHUB_OUTPUT"
-            echo 'Strix secrets not configured; skipping.'
+            echo 'STRIX_LLM is not configured; skipping.'
           else
             echo 'enabled=true' >> "$GITHUB_OUTPUT"
           fi
@@ -589,7 +587,7 @@ jobs:
           DEFAULT_PROVIDER=""
           raw="$(printf '%s' "$STRIX_LLM" | tr -d '\r\n')"
           if ! normalized="$(normalize_model "$raw" 2>&1)"; then
-            echo "::error::$normalized"
+            echo "::error::Invalid STRIX_LLM provider/model identifier. Use a provider-qualified value such as 'vertex_ai/<model>', 'gemini/<model>', 'openai/<model>', or 'anthropic/<model>'."
             exit 1
           fi
           provider=""
@@ -597,49 +595,120 @@ jobs:
             */*) provider="${normalized%%/*}" ;;
           esac
           if [ -z "$provider" ]; then
-            echo "::error::STRIX_LLM must be provider-qualified (e.g. 'vertex_ai/<model>', 'gemini/<model>', 'openai/<model>', 'anthropic/<model>'); got '$normalized'."
+            echo "::error::STRIX_LLM must be provider-qualified (e.g. 'vertex_ai/<model>', 'gemini/<model>', 'openai/<model>', 'anthropic/<model>')."
             exit 1
           fi
-          echo "provider=$provider" >> "$GITHUB_OUTPUT"
-          if [ "$provider" = "vertex_ai" ] || [ "$provider" = "vertex_ai_beta" ]; then
-            echo 'is_vertex=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'is_vertex=false' >> "$GITHUB_OUTPUT"
-          fi
-          echo "Detected Strix LLM provider: $provider (normalized='$normalized')"
+          {
+            echo "provider=$provider"
+            if is_vertex_model "$normalized"; then
+              echo 'is_vertex=true'
+              echo 'needs_gcp_credentials=true'
+              echo 'needs_llm_api_key=false'
+            else
+              echo 'is_vertex=false'
+              echo 'needs_gcp_credentials=false'
+              echo 'needs_llm_api_key=true'
+            fi
+          } >> "$GITHUB_OUTPUT"
+          echo "Detected Strix LLM provider: $provider"
 
-      - name: Install Strix
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+      - name: Gate LLM API key credentials
+        id: llm_api_key_gate
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_llm_api_key == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          python -m pip install --no-cache-dir --no-deps --require-hashes -r requirements-strix-ci.txt
+          # shellcheck disable=SC2016 # Markdown literals intentionally use backticks.
+          trimmed_llm_api_key="$(printf '%s' "$LLM_API_KEY" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$trimmed_llm_api_key" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          is_fail_closed='false'
+          if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            is_fail_closed='true'
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$WORKFLOW_RUN_EVENT" = "push" ] && { [ "$WORKFLOW_RUN_HEAD_BRANCH" = "develop" ] || [ "$WORKFLOW_RUN_HEAD_BRANCH" = "main" ]; }; then
+            is_fail_closed='true'
+          fi
+
+          {
+            echo '### Strix quick scan'
+            echo
+            if [ "$is_fail_closed" = 'true' ]; then
+              echo '- Outcome: fail-closed before scanner execution'
+            else
+              echo '- Outcome: skipped before scanner execution'
+            fi
+            echo "- Reason: provider \`${{ steps.provider.outputs.provider }}\` requires \`LLM_API_KEY\`, but the secret is not configured"
+            echo '- Policy: PR missing-secret runs produce explicit no-scan evidence; protected branch and manual security scans fail closed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$is_fail_closed" = 'true' ]; then
+            echo '::error::LLM_API_KEY is not configured for this non-Vertex provider; failing closed.'
+            exit 1
+          fi
+          echo 'ready=false' >> "$GITHUB_OUTPUT"
+          echo 'reason=missing-llm-api-key' >> "$GITHUB_OUTPUT"
 
       - name: Gate GCP credentials
         id: gcp_gate
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.is_vertex == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_gcp_credentials == 'true'
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           # Trim leading/trailing whitespace and CR/LF before checking so a
           # whitespace-only secret is treated as missing instead of present.
           trimmed_gcp_sa_key="$(printf '%s' "$GCP_SA_KEY" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -n "$trimmed_gcp_sa_key" ]; then
-            echo 'has_gcp=true' >> "$GITHUB_OUTPUT"
-          else
-            # Vertex provider requires GCP credentials; fail-closed so a
-            # silently green check cannot be produced when auth is missing.
-            echo '::error::Vertex provider selected but GCP_SA_KEY is not configured; failing closed.'
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          is_fail_closed='false'
+          if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            is_fail_closed='true'
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$WORKFLOW_RUN_EVENT" = "push" ] && { [ "$WORKFLOW_RUN_HEAD_BRANCH" = "develop" ] || [ "$WORKFLOW_RUN_HEAD_BRANCH" = "main" ]; }; then
+            is_fail_closed='true'
+          fi
+
+          {
+            echo '### Strix quick scan'
+            echo
+            if [ "$is_fail_closed" = 'true' ]; then
+              echo '- Outcome: fail-closed before scanner execution'
+            else
+              echo '- Outcome: skipped before scanner execution'
+            fi
+            echo "- Reason: provider \`${{ steps.provider.outputs.provider }}\` requires \`GCP_SA_KEY\`, but the secret is not configured"
+            echo '- Policy: PR missing-secret runs produce explicit no-scan evidence; protected branch and manual security scans fail closed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$is_fail_closed" = 'true' ]; then
+            echo '::error::GCP_SA_KEY is not configured for this Vertex provider; failing closed.'
             exit 1
           fi
+          echo 'ready=false' >> "$GITHUB_OUTPUT"
+          echo 'reason=missing-gcp-sa-key' >> "$GITHUB_OUTPUT"
+
+      - name: Install Strix
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
+        run: |
+          python -m pip install --no-cache-dir --no-deps --require-hashes -r requirements-strix-ci.txt
 
       - name: Authenticate to Google Cloud
         id: gcp_auth
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.is_vertex == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_gcp_credentials == 'true' && steps.gcp_gate.outputs.ready == 'true'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Relocate generated GCP credentials outside scan target
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.is_vertex == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_gcp_credentials == 'true' && steps.gcp_gate.outputs.ready == 'true'
         run: |
           auth_creds_path="${{ steps.gcp_auth.outputs.credentials_file_path }}"
           relocated="$(AUTH_CREDS_PATH="$auth_creds_path" python3 - <<'PY'
@@ -673,7 +742,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Mask LLM API key
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_llm_api_key == 'true' && steps.llm_api_key_gate.outputs.ready == 'true'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
@@ -689,7 +758,7 @@ jobs:
           fi
 
       - name: Prepare LLM API key input file
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_llm_api_key == 'true' && steps.llm_api_key_gate.outputs.ready == 'true'
         env:
           LLM_API_KEY_SECRET: ${{ secrets.LLM_API_KEY }}
         run: |
@@ -701,7 +770,7 @@ jobs:
           fi
 
       - name: Prepare Strix model input file
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
         env:
           STRIX_LLM_SECRET: ${{ secrets.STRIX_LLM }}
         run: |
@@ -713,7 +782,7 @@ jobs:
           fi
 
       - name: Prepare LLM API base input file
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
         env:
           LLM_API_BASE_SECRET: ${{ secrets.LLM_API_BASE }}
         run: |
@@ -726,7 +795,7 @@ jobs:
 
       - name: Run Strix (quick)
         id: strix_quick
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
         continue-on-error: ${{ steps.decide.outputs.is_pr_associated == 'true' }}
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
@@ -788,6 +857,13 @@ jobs:
           WORKFLOW_RUN_PREPARE_DEFERRED: ${{ steps.prepare_workflow_run_target.outputs.deferred || env.STRIX_WORKFLOW_RUN_PREPARE_DEFERRED }}
           WORKFLOW_RUN_PREPARE_DEFER_REASON: ${{ steps.prepare_workflow_run_target.outputs.reason || env.STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON }}
           IS_PR_ASSOCIATED_SCAN: ${{ steps.decide.outputs.is_pr_associated == 'true' }}
+          LLM_API_KEY_READY: ${{ steps.llm_api_key_gate.outputs.ready }}
+          LLM_API_KEY_REASON: ${{ steps.llm_api_key_gate.outputs.reason }}
+          GCP_READY: ${{ steps.gcp_gate.outputs.ready }}
+          GCP_REASON: ${{ steps.gcp_gate.outputs.reason }}
+          NEEDS_LLM_API_KEY: ${{ steps.provider.outputs.needs_llm_api_key }}
+          NEEDS_GCP_CREDENTIALS: ${{ steps.provider.outputs.needs_gcp_credentials }}
+          STRIX_PROVIDER: ${{ steps.provider.outputs.provider }}
         run: |
           # shellcheck disable=SC2016 # Markdown literals intentionally use backticks.
           if [ "$WORKFLOW_RUN_PREPARE_DEFERRED" = "true" ]; then
@@ -820,6 +896,20 @@ jobs:
               echo "- Reason: $reason"
               echo "- Policy: PR scans only run when the PR is approved on head and auto-merge is enabled, or when a reviewer attaches the \`run-strix\` override label."
               echo "- Re-trigger: approving on the current head or attaching \`run-strix\` will re-run this workflow and execute the heavy scan, which then records PR Strix remediation evidence."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if { [ "$NEEDS_LLM_API_KEY" = "true" ] && [ "$LLM_API_KEY_READY" != "true" ]; } || { [ "$NEEDS_GCP_CREDENTIALS" = "true" ] && [ "$GCP_READY" != "true" ]; }; then
+            reason="${LLM_API_KEY_REASON:-${GCP_REASON:-missing-provider-credentials}}"
+            echo "Strix heavy LLM scan skipped (reason=$reason); provider '$STRIX_PROVIDER' credentials are not configured for this PR run."
+            {
+              echo '### Strix quick scan'
+              echo
+              echo '- Outcome: skipped before scanner execution'
+              echo "- Reason: $reason"
+              echo "- Provider: $STRIX_PROVIDER"
+              echo '- Policy: PR missing-secret runs produce explicit no-scan evidence; protected branch and manual security scans fail closed.'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi

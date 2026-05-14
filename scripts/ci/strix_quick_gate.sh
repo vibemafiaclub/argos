@@ -167,15 +167,7 @@ if [ -z "$STRIX_LLM" ]; then
 fi
 
 LLM_API_KEY_FILE="${LLM_API_KEY_FILE:-}"
-if [ -z "$LLM_API_KEY_FILE" ] || [ ! -f "$LLM_API_KEY_FILE" ] || [ -L "$LLM_API_KEY_FILE" ]; then
-	echo "ERROR: LLM_API_KEY_FILE must reference a regular file containing the API key." >&2
-	exit 2
-fi
-LLM_API_KEY="$(trim_whitespace "$(cat -- "$LLM_API_KEY_FILE")")"
-if [ -z "$LLM_API_KEY" ]; then
-	echo "ERROR: LLM_API_KEY_FILE must contain a non-empty API key." >&2
-	exit 2
-fi
+LLM_API_KEY=""
 
 require_non_negative_integer() {
 	local value="$1"
@@ -360,6 +352,18 @@ fi
 PRIMARY_MODEL="$(normalize_model "$STRIX_LLM")"
 if [ "$PRIMARY_MODEL" != "$STRIX_LLM" ]; then
 	echo "Normalized STRIX_LLM to provider-qualified model '$PRIMARY_MODEL'."
+fi
+
+if model_requires_llm_api_key "$PRIMARY_MODEL"; then
+	if [ -z "$LLM_API_KEY_FILE" ] || [ ! -f "$LLM_API_KEY_FILE" ] || [ -L "$LLM_API_KEY_FILE" ]; then
+		echo "ERROR: LLM_API_KEY_FILE must reference a regular file containing the API key for model '$PRIMARY_MODEL'." >&2
+		exit 2
+	fi
+	LLM_API_KEY="$(trim_whitespace "$(cat -- "$LLM_API_KEY_FILE")")"
+	if [ -z "$LLM_API_KEY" ]; then
+		echo "ERROR: LLM_API_KEY_FILE must contain a non-empty API key for model '$PRIMARY_MODEL'." >&2
+		exit 2
+	fi
 fi
 
 require_non_negative_integer "$STRIX_TRANSIENT_RETRY_PER_MODEL" "STRIX_TRANSIENT_RETRY_PER_MODEL"
@@ -1898,7 +1902,9 @@ for key in (
         child_env[key] = value
 child_env["STRIX_LLM"] = os.environ["STRIX_CHILD_MODEL"]
 child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
-child_env["LLM_API_KEY"] = os.environ["STRIX_CHILD_LLM_API_KEY"]
+llm_api_key = os.environ.get("STRIX_CHILD_LLM_API_KEY")
+if llm_api_key:
+    child_env["LLM_API_KEY"] = llm_api_key
 child_env["STRIX_REPORTS_DIR"] = os.environ["STRIX_CHILD_REPORTS_DIR"]
 # Forward strix runtime tunables that the workflow `env:` block sets but
 # which would otherwise be stripped by this allowlist-based child_env
@@ -1922,18 +1928,25 @@ for child_key, target_key in (
 for key, value in os.environ.items():
     if key.startswith("FAKE_STRIX_") and value:
         child_env[key] = value
+is_vertex_child = os.environ["STRIX_CHILD_MODEL"].startswith(("vertex_ai/", "vertex_ai_beta/"))
+if is_vertex_child:
+    for key in (
+        "GOOGLE_GHA_CREDS_PATH",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT",
+        "GCLOUD_PROJECT",
+        "CLOUDSDK_CORE_PROJECT",
+        "CLOUDSDK_PROJECT",
+    ):
+        value = os.environ.get(key)
+        if value:
+            child_env[key] = value
 for key in (
-    "GOOGLE_GHA_CREDS_PATH",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
     "VERTEXAI_LOCATION",
     "VERTEX_LOCATION",
     "GEMINI_LOCATION",
-    "GOOGLE_CLOUD_PROJECT",
-    "GCP_PROJECT",
-    "GCLOUD_PROJECT",
-    "CLOUDSDK_CORE_PROJECT",
-    "CLOUDSDK_PROJECT",
     "LLM_TIMEOUT",
     "STRIX_MEMORY_COMPRESSOR_TIMEOUT",
     "STRIX_REASONING_EFFORT",

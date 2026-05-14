@@ -69,6 +69,16 @@ assert_workflow_strix_policy_static_guards() {
 		"workflow no-source optimization must include SQL files"
 	assert_file_contains "$workflow_file" 'endswith(".json")' \
 		"workflow no-source optimization must include JSON files"
+	assert_file_contains "$workflow_file" "needs_llm_api_key=true" \
+		"workflow must emit provider-aware LLM API key credential requirements"
+	assert_file_contains "$workflow_file" "needs_gcp_credentials=true" \
+		"workflow must emit provider-aware GCP credential requirements"
+	assert_file_contains "$workflow_file" "Gate LLM API key credentials" \
+		"workflow must gate API-key providers separately from Vertex providers"
+	assert_file_contains "$workflow_file" 'requires \`GCP_SA_KEY\`, but the secret is not configured' \
+		"workflow must report missing Vertex credentials explicitly"
+	assert_file_contains "$workflow_file" 'requires \`LLM_API_KEY\`, but the secret is not configured' \
+		"workflow must report missing API-key provider credentials explicitly"
 }
 
 assert_osv_workflow_static_guards() {
@@ -1727,8 +1737,10 @@ EOF
 	)
 	printf '%s' "$initial_model" >"$strix_llm_file"
 	env_cmd+=(STRIX_LLM_FILE="$strix_llm_file")
-	printf '%s' 'dummy' >"$llm_api_key_file"
-	env_cmd+=(LLM_API_KEY_FILE="$llm_api_key_file")
+	if [ -z "${RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE+x}" ]; then
+		printf '%s' 'dummy' >"$llm_api_key_file"
+		env_cmd+=(LLM_API_KEY_FILE="$llm_api_key_file")
+	fi
 	env_cmd+=(STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping")
 	# Production default for STRIX_PR_BOUNDED_SCOPE is 0 (full-repo scan,
 	# per AGENTS.md / ARCHITECTURE.md canonical Strix scope policy).  The
@@ -2035,6 +2047,8 @@ run_global_region_child_env_case() {
 	local expected_vertexai_location="$3"
 	local expected_vertex_location="$4"
 	local expected_gemini_location="$5"
+	local expected_llm_api_key_state="${6-<present>}"
+	local expected_google_credentials_state="${7-<present>}"
 
 	local tmp_dir
 	tmp_dir="$(mktemp -d)"
@@ -2072,6 +2086,8 @@ done
 	printf 'STRIX_REASONING_EFFORT=%s\n' "${STRIX_REASONING_EFFORT:-<unset>}"
 	printf 'STRIX_LLM_MAX_RETRIES=%s\n' "${STRIX_LLM_MAX_RETRIES:-<unset>}"
 	printf 'LLM_API_KEY=%s\n' "${LLM_API_KEY:+<present>}"
+	printf 'GOOGLE_APPLICATION_CREDENTIALS=%s\n' "${GOOGLE_APPLICATION_CREDENTIALS:+<present>}"
+	printf 'GOOGLE_CLOUD_PROJECT=%s\n' "${GOOGLE_CLOUD_PROJECT:-<unset>}"
 	printf 'STRIX_PARENT_ONLY_SECRET=%s\n' "${STRIX_PARENT_ONLY_SECRET:-<unset>}"
 } >"${FAKE_STRIX_ENV_LOG:?}"
 echo "scan ok"
@@ -2101,6 +2117,8 @@ EOF
 			STRIX_MEMORY_COMPRESSOR_TIMEOUT="62" \
 			STRIX_REASONING_EFFORT="low" \
 			STRIX_LLM_MAX_RETRIES="3" \
+			GOOGLE_APPLICATION_CREDENTIALS="$tmp_dir/fake-google-creds.json" \
+			GOOGLE_CLOUD_PROJECT="fake-google-project" \
 			STRIX_PARENT_ONLY_SECRET="must-not-leak" \
 			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
@@ -2117,7 +2135,13 @@ EOF
 	assert_file_contains "$env_log" "STRIX_MEMORY_COMPRESSOR_TIMEOUT=62" "global region child env ($provider) STRIX_MEMORY_COMPRESSOR_TIMEOUT"
 	assert_file_contains "$env_log" "STRIX_REASONING_EFFORT=low" "global region child env ($provider) STRIX_REASONING_EFFORT"
 	assert_file_contains "$env_log" "STRIX_LLM_MAX_RETRIES=3" "global region child env ($provider) STRIX_LLM_MAX_RETRIES"
-	assert_file_contains "$env_log" "LLM_API_KEY=<present>" "global region child env ($provider) passes required child api key"
+	assert_file_contains "$env_log" "LLM_API_KEY=$expected_llm_api_key_state" "global region child env ($provider) api key forwarding state"
+	assert_file_contains "$env_log" "GOOGLE_APPLICATION_CREDENTIALS=$expected_google_credentials_state" "global region child env ($provider) Google credential forwarding state"
+	if [ "$expected_google_credentials_state" = "<present>" ]; then
+		assert_file_contains "$env_log" "GOOGLE_CLOUD_PROJECT=fake-google-project" "global region child env ($provider) Google project forwarding state"
+	else
+		assert_file_contains "$env_log" "GOOGLE_CLOUD_PROJECT=<unset>" "global region child env ($provider) Google project forwarding state"
+	fi
 	assert_file_contains "$env_log" "STRIX_PARENT_ONLY_SECRET=<unset>" "global region child env ($provider) does not leak parent-only secrets"
 	assert_file_not_contains "$env_log" "dummy-secret-value" "global region child env ($provider) masks api key value in assertions"
 	assert_file_not_contains "$env_log" "must-not-leak" "global region child env ($provider) blocks unrelated secret value"
@@ -4763,9 +4787,9 @@ run_gate_case "pr-low-markdown-plus-console-critical-manifest-after-fallback-aut
 	'{"workflow_runs":[{"id":405,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]},{"id":406,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]}]}'
 
 run_missing_config_case "missing-strix-llm" "" "dummy" "ERROR: STRIX_LLM_FILE must reference a regular file containing the model."
-run_missing_config_case "missing-llm-api-key" "vertex_ai/ready-primary" "" "ERROR: LLM_API_KEY_FILE must reference a regular file containing the API key."
+run_missing_config_case "missing-llm-api-key" "openai/ready-primary" "" "ERROR: LLM_API_KEY_FILE must reference a regular file containing the API key for model 'openai/ready-primary'."
 run_missing_config_case "whitespace-only-strix-llm" "   " "dummy" "ERROR: STRIX_LLM_FILE must contain a non-empty model value."
-run_missing_config_case "whitespace-only-llm-api-key" "vertex_ai/ready-primary" $'\t  ' "ERROR: LLM_API_KEY_FILE must contain a non-empty API key."
+run_missing_config_case "whitespace-only-llm-api-key" "anthropic/ready-primary" $'\t  ' "ERROR: LLM_API_KEY_FILE must contain a non-empty API key for model 'anthropic/ready-primary'."
 
 # ── Segment boundary enforcement for is_vertex_resource_path / extract_vertex_model_id ──
 # Shell glob '*' matches '/' so the old case-pattern implementation accepted
@@ -4976,12 +5000,63 @@ run_gate_case "vertex-ai-beta-primary-vertex-ai-fallback-success" \
 	"vertex_ai_beta/missing-primary|vertex_ai/fallback-one" \
 	"<unset>|<unset>"
 
+# Vertex providers authenticate through Google Application Default Credentials,
+# not the generic LLM_API_KEY. They must be able to run without LLM_API_KEY_FILE
+# so STRIX_LLM can point at either Vertex Gemini or Vertex Anthropic models.
+RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE=1 run_gate_case "success" \
+	"vertex_ai/gemini-2.5-pro" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/gemini-2.5-pro'" \
+	"1" \
+	"vertex_ai/gemini-2.5-pro" \
+	"<unset>"
+
+RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE=1 run_gate_case "success" \
+	"vertex_ai_beta/claude-sonnet-4" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai_beta/claude-sonnet-4'" \
+	"1" \
+	"vertex_ai_beta/claude-sonnet-4" \
+	"<unset>"
+
+# Direct API-key providers still fail-fast without LLM_API_KEY_FILE.
+RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE=1 run_gate_case "success" \
+	"openai/gpt-5" \
+	"" \
+	"2" \
+	"LLM_API_KEY_FILE must reference a regular file containing the API key for model 'openai/gpt-5'" \
+	"0" \
+	"" \
+	""
+
+RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE=1 run_gate_case "success" \
+	"anthropic/claude-sonnet-4" \
+	"" \
+	"2" \
+	"LLM_API_KEY_FILE must reference a regular file containing the API key for model 'anthropic/claude-sonnet-4'" \
+	"0" \
+	"" \
+	""
+
+RUN_GATE_CASE_OMIT_LLM_API_KEY_FILE=1 run_gate_case "success" \
+	"gemini/gemini-2.5-pro" \
+	"" \
+	"2" \
+	"LLM_API_KEY_FILE must reference a regular file containing the API key for model 'gemini/gemini-2.5-pro'" \
+	"0" \
+	"" \
+	""
+
 # Global-region aliases must be forwarded only through the curated child
 # environment.  These regressions prove Vertex aliases and Gemini's harmless
 # alias reach the Strix subprocess while unrelated parent secrets do not leak.
-run_global_region_child_env_case "vertex_ai" "gemini-2.5-pro" "global" "global" "global"
-run_global_region_child_env_case "vertex_ai_beta" "gemini-2.5-pro" "global" "global" "global"
-run_global_region_child_env_case "gemini" "gemini-2.5-pro" "global" "global" "global"
+run_global_region_child_env_case "vertex_ai" "gemini-2.5-pro" "global" "global" "global" "" "<present>"
+run_global_region_child_env_case "vertex_ai_beta" "gemini-2.5-pro" "global" "global" "global" "" "<present>"
+run_global_region_child_env_case "openai" "gpt-5" "global" "global" "global" "<present>" ""
+run_global_region_child_env_case "anthropic" "claude-sonnet-4" "global" "global" "global" "<present>" ""
+run_global_region_child_env_case "gemini" "gemini-2.5-pro" "global" "global" "global" "<present>" ""
 
 if [ "$FAILURES" -ne 0 ]; then
 	echo "test_strix_quick_gate: ${FAILURES} failure(s)" >&2
