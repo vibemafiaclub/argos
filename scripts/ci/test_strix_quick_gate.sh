@@ -1,0 +1,4650 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(
+	CDPATH=''
+	cd -P -- "$(dirname -- "$0")"
+	pwd -P
+)"
+REPO_ROOT="$(
+	CDPATH=''
+	cd -P -- "$SCRIPT_DIR/../.."
+	pwd -P
+)"
+GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
+
+FAILURES=0
+
+record_failure() {
+	echo "FAIL: $1" >&2
+	FAILURES=$((FAILURES + 1))
+}
+
+assert_equals() {
+	local expected="$1"
+	local actual="$2"
+	local message="$3"
+
+	if [ "$expected" != "$actual" ]; then
+		record_failure "$message (expected='$expected' actual='$actual')"
+	fi
+}
+
+assert_file_contains() {
+	local file_path="$1"
+	local needle="$2"
+	local message="$3"
+
+	if ! grep -Fq -- "$needle" "$file_path"; then
+		record_failure "$message (missing '$needle')"
+	fi
+}
+
+assert_file_not_contains() {
+	local file_path="$1"
+	local needle="$2"
+	local message="$3"
+
+	if grep -Fq -- "$needle" "$file_path"; then
+		record_failure "$message (unexpected '$needle')"
+	fi
+}
+
+assert_strix_workflow_pr_trigger_hardened() {
+	local workflow_file="$REPO_ROOT/.github/workflows/strix.yml"
+
+	assert_file_contains "$workflow_file" "branches: [master]" "strix workflow scans the protected default branch"
+	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
+	assert_file_contains "$workflow_file" "Materialize trusted workspace" "strix workflow materializes trusted workspace"
+	assert_file_contains "$workflow_file" "TRUSTED_WORKSPACE_SHA" "strix workflow pins trusted workspace SHA"
+	assert_file_contains "$workflow_file" "TRUSTED_WORKSPACE=\$trusted_workspace" "strix workflow exports a trusted workspace path"
+	assert_file_contains "$workflow_file" "git -C \"\$TRUSTED_WORKSPACE\"" "strix workflow runs git only inside trusted workspace"
+	assert_file_contains "$workflow_file" "bash \"\$TRUSTED_STRIX_GATE_TEST\"" "strix workflow self-test executes trusted temp script"
+	assert_file_contains "$workflow_file" "bash \"\$TRUSTED_STRIX_GATE\"" "strix workflow executes trusted temp gate script"
+	assert_file_contains "$workflow_file" "Collect Strix reports for artifact upload" "strix workflow preserves reports from trusted workspace"
+	assert_file_contains "$workflow_file" ". \"\$TRUSTED_WORKSPACE/scripts/ci/strix_model_utils.sh\"" "strix workflow reuses trusted model auth helpers"
+	assert_file_contains "$workflow_file" "model_requires_vertex_auth \"\$strix_llm\"" "strix workflow delegates Vertex auth detection"
+	assert_file_not_contains "$workflow_file" "actions/checkout" "strix workflow avoids checkout in privileged context"
+	assert_file_not_contains "$workflow_file" "run: bash ./scripts/ci/test_strix_quick_gate.sh" "strix workflow avoids direct repo self-test execution on privileged trigger"
+	assert_file_not_contains "$workflow_file" "run: bash ./scripts/ci/strix_quick_gate.sh" "strix workflow avoids direct repo gate execution on privileged trigger"
+	assert_file_contains "$workflow_file" "Fetch pull request head for trusted scan" "strix workflow fetches PR head without checkout"
+	assert_file_contains "$workflow_file" "refs/remotes/pull" "strix workflow verifies fetched PR head ref"
+	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target'" "strix workflow gates PR context on pull_request_target"
+	assert_file_contains "$workflow_file" "[ \"\$GITHUB_EVENT_NAME\" = \"pull_request_target\" ]" "strix workflow fails closed when PR target secrets are missing"
+	assert_file_contains "$workflow_file" "Vertex-authenticated Strix model requires GCP_SA_KEY on privileged event" "strix workflow fails closed when PR target model auth is missing"
+	assert_file_contains "$workflow_file" "STRIX_PR_SCOPE_MAX_FILES_PER_BATCH: 4" "strix workflow caps PR batches to avoid timeout-only rebalancing"
+	if grep -Eq '^[[:space:]]+pull_request:[[:space:]]*$' "$workflow_file"; then
+		record_failure "strix workflow must not expose secrets on pull_request events"
+	fi
+	assert_file_not_contains "$workflow_file" "github.event_name == 'pull_request'" "strix workflow should not retain pull_request-only expressions"
+}
+
+assert_strix_gate_target_scope_separated() {
+	assert_file_not_contains "$GATE_SCRIPT" "or generated PR scope directories" "strix gate keeps user target validation separate from internal PR scopes"
+	assert_file_contains "$GATE_SCRIPT" "TARGET_PATH_IS_INTERNAL_PR_SCOPE" "strix gate marks internally generated PR scan scopes explicitly"
+}
+
+assert_internal_pr_scope_targets() {
+	local target_log_file="$1"
+	local repo_root_dir="$2"
+	local expected_count="$3"
+
+	if [ ! -f "$target_log_file" ]; then
+		record_failure "internal PR scope target log should exist"
+		return
+	fi
+
+	local actual_count=0
+	local target_path
+	while IFS= read -r target_path; do
+		actual_count=$((actual_count + 1))
+		case "$target_path" in
+		"$repo_root_dir" | "$repo_root_dir"/*)
+			record_failure "internal PR scope target should not reuse repository path: $target_path"
+			;;
+		esac
+		case "$(basename -- "$target_path")" in
+		strix-pr-scope.*)
+			;;
+		*)
+			record_failure "internal PR scope target should be generated by build_pull_request_scope_dir: $target_path"
+			;;
+		esac
+	done <"$target_log_file"
+
+	assert_equals "$expected_count" "$actual_count" "internal PR scope target count"
+}
+
+run_gate_case() {
+	local scenario="$1"
+	local initial_model="$2"
+	local fallback_models="$3"
+	local expected_exit="$4"
+	local expected_message="$5"
+	local expected_calls="$6"
+	local expected_model_sequence="${7:-}"
+	local expected_api_base_sequence="${8:-}"
+	local default_provider="${9-vertex_ai}"
+	local raw_llm_api_base_override="${10-__DEFAULT__}"
+	local initial_llm_api_base="${11-}"
+
+	local raw_llm_api_base="https://example.invalid/generateContent"
+	if [ "$raw_llm_api_base_override" != "__DEFAULT__" ]; then
+		raw_llm_api_base="$raw_llm_api_base_override"
+	fi
+	local transient_retry_per_model="${12-0}"
+	local min_fail_severity="${13-CRITICAL}"
+	local transient_retry_backoff_seconds="${14-0}"
+	local custom_target_path="${15-}"
+	local custom_source_dirs="${16-}"
+	local process_timeout_seconds="${17-1200}"
+	local total_timeout_seconds="${18-0}"
+	local github_event_name="${19-}"
+	local changed_files_override="${20-}"
+	local event_name_override="${21-}"
+	local pr_scope_max_files_per_batch="${22-}"
+	local disable_pr_scoping="${23-0}"
+	local test_pr_sca_status_override="${24-}"
+	local current_pr_number="${25-}"
+	local authoritative_sca_runs_json="${26-}"
+	local gemini_fallback_models="${27-__SAME_AS_FALLBACK_MODELS__}"
+	local generic_fallback_models="${28-}"
+
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	# Separate bin/ (fake strix + helper files) from workspace/ (target path)
+	# so grep -r over the target path never matches the fake strix script itself.
+	local bin_dir="$tmp_dir/bin"
+	local workspace_dir="$tmp_dir/workspace"
+	local repo_root_dir="$workspace_dir/smart-crawling-server"
+	mkdir -p "$bin_dir" "$repo_root_dir/src"
+	mkdir -p "$repo_root_dir/scripts/ci"
+	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$GATE_SCRIPT" "$gate_under_test"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$gate_under_test"
+	local fake_strix="$bin_dir/strix"
+	local call_log="$tmp_dir/calls.log"
+	local api_base_log="$tmp_dir/api_base.log"
+	local target_log="$tmp_dir/target.log"
+	local runtime_env_log="$tmp_dir/runtime_env.log"
+	local state_file="$tmp_dir/state.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
+	local output_log="$tmp_dir/output.log"
+	local fake_gh="$bin_dir/gh"
+	local gh_token_log="$tmp_dir/gh_token.log"
+	local event_payload_file="$tmp_dir/github_event.json"
+
+	# Resolve target path: use repo-local relative defaults to mirror the real workflow.
+	local effective_target_path="."
+	if [ "$custom_target_path" = "__USE_SUBDIR_SRC__" ]; then
+		# Simulate STRIX_TARGET_PATH=./src with a repo-local relative path.
+		effective_target_path="./src"
+	elif [ -n "$custom_target_path" ]; then
+		effective_target_path="$custom_target_path"
+		# Ensure the custom target path exists
+		mkdir -p "$effective_target_path"
+	fi
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "${STRIX_LLM:-}" >> "${FAKE_STRIX_CALL_LOG:?}"
+printf '%s\n' "${LLM_API_BASE:-<unset>}" >> "${FAKE_STRIX_API_BASE_LOG:?}"
+if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
+	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;UNRELATED_SECRET=%s\n' \
+		"${LLM_TIMEOUT:-<unset>}" \
+		"${STRIX_MEMORY_COMPRESSOR_TIMEOUT:-<unset>}" \
+		"${STRIX_REASONING_EFFORT:-<unset>}" \
+		"${STRIX_LLM_MAX_RETRIES:-<unset>}" \
+		"${GEMINI_LOCATION:-<unset>}" \
+		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
+fi
+
+target_path=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
+		target_path="$2"
+		break
+	fi
+	shift
+done
+printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
+
+STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
+
+case "${FAKE_STRIX_SCENARIO:?}" in
+	success|runtime-env-forwarding|vertex-primary-success-timing-message)
+		echo "scan ok"
+		exit 0
+		;;
+	slow-timeout)
+		sleep 2
+		exit 0
+		;;
+	timeout-disabled-success)
+		sleep 1
+		echo "scan ok with timeout disabled"
+		exit 0
+		;;
+	vertex-primary-notfound-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok with fallback"
+			exit 0
+			;;
+		*)
+			echo "unexpected model ${STRIX_LLM:-}" >&2
+			exit 9
+			;;
+		esac
+		;;
+	vertex-all-notfound)
+		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+		echo '"status": "NOT_FOUND"'
+		exit 1
+		;;
+	nonrecoverable)
+		echo "Error: transport timeout"
+		exit 1
+		;;
+	provider-prefix-required)
+		if [ "${STRIX_LLM:-}" = "vertex_ai/gemini-2.5-pro" ]; then
+			echo "scan ok with normalized provider"
+			exit 0
+		fi
+		echo "Error: provider prefix not normalized (${STRIX_LLM:-})" >&2
+		exit 10
+		;;
+	provider-prefix-fallback-normalization)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after fallback normalization"
+			exit 0
+			;;
+		*)
+			echo "Error: fallback provider prefix not normalized (${STRIX_LLM:-})" >&2
+			exit 11
+			;;
+		esac
+		;;
+	provider-prefix-required-resource-path-primary-implicit-default-provider | provider-prefix-required-resource-path-primary-explicit-empty-default-provider)
+		if [ "${STRIX_LLM:-}" = "vertex_ai/gemini-2.5-pro" ]; then
+			echo "scan ok with resource-path normalization"
+			exit 0
+		fi
+		echo "Error: resource-path model not normalized (${STRIX_LLM:-})" >&2
+		exit 12
+		;;
+	provider-prefix-resource-path-primary-notfound-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after resource-path fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: resource-path fallback model not normalized (${STRIX_LLM:-})" >&2
+			exit 13
+			;;
+		esac
+		;;
+	vertex-custom-model-resource-path)
+		# projects/<p>/locations/<l>/models/<id> (no publishers/ segment)
+		if [ "${STRIX_LLM:-}" = "vertex_ai/my-custom-model-123" ]; then
+			echo "scan ok with custom model resource-path normalization"
+			exit 0
+		fi
+		echo "Error: custom model resource-path not normalized (${STRIX_LLM:-})" >&2
+		exit 40
+		;;
+	vertex-notfound-without-status-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after status-less not found fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: status-less fallback model not normalized (${STRIX_LLM:-})" >&2
+			exit 14
+			;;
+		esac
+		;;
+	vertex-notfound-compact-status-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo 'litellm.exceptions.NotFoundError: VertexAI error'
+			echo '{"error":{"status":"NOT_FOUND"}}'
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after compact-status not found fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: compact-status fallback model not normalized (${STRIX_LLM:-})" >&2
+			exit 17
+			;;
+		esac
+		;;
+	nonvertex-slash-model-passthrough)
+		if [ "${STRIX_LLM:-}" = "foo/bar" ]; then
+			echo "scan ok with non-vertex slash model passthrough"
+			exit 0
+		fi
+		echo "Error: non-vertex slash model was rewritten (${STRIX_LLM:-})" >&2
+		exit 18
+		;;
+	primary-duplicate-in-fallback)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after duplicate-primary skip"
+			exit 0
+			;;
+		*)
+			echo "Error: duplicate-primary path unexpected (${STRIX_LLM:-})" >&2
+			exit 15
+			;;
+		esac
+		;;
+	multiline-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		vertex_ai/fallback-two)
+			echo "scan ok after multiline fallback parsing"
+			exit 0
+			;;
+		*)
+			echo "Error: multiline fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 19
+			;;
+		esac
+		;;
+	vertex-primary-ratelimit-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/ratelimit-primary)
+			echo "Penetration test failed: LLM request failed: RateLimitError"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after rate-limit fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: ratelimit fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 21
+			;;
+		esac
+		;;
+	vertex-primary-resource-exhausted-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/resource-exhausted-primary)
+			echo '{"error":{"status":"RESOURCE_EXHAUSTED"}}'
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after resource exhausted fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: resource exhausted fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 23
+			;;
+		esac
+		;;
+	vertex-primary-429-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/http429-primary)
+			echo "litellm: HTTP 429 Too Many Requests"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after 429 fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: 429 fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 24
+			;;
+		esac
+		;;
+	vertex-primary-midstream-fallback-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/midstream-primary)
+			echo "Penetration test failed: LLM request failed: MidStreamFallbackError"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after midstream fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: midstream fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 25
+			;;
+		esac
+		;;
+	vertex-primary-midstream-retry-same-model-success)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/retry-midstream-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				echo "Penetration test failed: LLM request failed: MidStreamFallbackError"
+				exit 1
+			fi
+			echo "scan ok after same-model retry"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for same-model retry scenario" >&2
+			exit 30
+			;;
+		*)
+			echo "Error: midstream fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 30
+			;;
+		esac
+		;;
+	vertex-primary-ratelimit-retry-same-model-success|vertex-primary-ratelimit-retry-reason-message)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/retry-ratelimit-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				echo "Penetration test failed: LLM request failed: RateLimitError"
+				exit 1
+			fi
+			echo "scan ok after same-model rate-limit retry"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for same-model rate-limit retry scenario" >&2
+			exit 31
+			;;
+		*)
+			echo "Error: rate-limit fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 31
+			;;
+		esac
+		;;
+	vertex-primary-api-connection-retry-same-model-success)
+		case "${STRIX_LLM:-}" in
+		gemini/retry-api-connection-primary|vertex_ai/retry-api-connection-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				echo "LLM CONNECTION FAILED"
+				echo "litellm.APIConnectionError: GeminiException - Server disconnected without sending a response."
+				exit 1
+			fi
+			echo "scan ok after same-model api connection retry"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for API connection retry scenario" >&2
+			exit 36
+			;;
+		*)
+			echo "Error: API connection retry path unexpected (${STRIX_LLM:-})" >&2
+			exit 36
+			;;
+		esac
+		;;
+	gemini-high-demand-retry-same-model-success)
+		case "${STRIX_LLM:-}" in
+		gemini/retry-high-demand-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				echo "LLM CONNECTION FAILED"
+				echo 'litellm.ServiceUnavailableError: GeminiException - {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}'
+				exit 1
+			fi
+			echo "scan ok after same-model high-demand retry"
+			exit 0
+			;;
+		*)
+			echo "Error: high-demand retry path unexpected (${STRIX_LLM:-})" >&2
+			exit 37
+			;;
+		esac
+		;;
+	gemini-timeout-retry-same-model-success)
+		case "${STRIX_LLM:-}" in
+		gemini/retry-timeout-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" >"${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				echo "LLM CONNECTION FAILED"
+				echo "Error: litellm.Timeout: Connection timed out after None seconds."
+				exit 1
+			fi
+			echo "scan ok after same-model timeout retry"
+			exit 0
+			;;
+		*)
+			echo "Error: gemini timeout retry path unexpected (${STRIX_LLM:-})" >&2
+			exit 38
+			;;
+		esac
+		;;
+	gemini-timeout-fallback-success|gemini-generic-fallback-success)
+		case "${STRIX_LLM:-}" in
+		gemini/timeout-fallback-primary)
+			echo "LLM CONNECTION FAILED"
+			echo "Error: litellm.Timeout: Connection timed out after None seconds."
+			exit 1
+			;;
+		gemini/fallback-one)
+			echo "scan ok after gemini fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: gemini timeout fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 39
+			;;
+		esac
+		;;
+	gemini-zero-findings-timeout-fallback-fails)
+		case "${STRIX_LLM:-}" in
+		gemini/zero-timeout-primary|gemini/fallback-one)
+			echo "Vulnerabilities 0"
+			echo "LLM CONNECTION FAILED"
+			echo "Error: litellm.Timeout: Connection timed out after None seconds."
+			exit 1
+			;;
+		*)
+			echo "Error: gemini zero-finding fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 40
+			;;
+		esac
+		;;
+	service-unavailable-no-llm-marker-nonrecoverable)
+		echo 'ServiceUnavailableError: {"error":{"code":503,"status":"UNAVAILABLE"}}'
+		echo 'target application high demand response'
+		exit 1
+		;;
+	server-disconnect-no-llm-marker-nonrecoverable)
+		echo "ConnectionError: Server disconnected without sending a response."
+		exit 1
+		;;
+	vertex-all-ratelimited)
+		echo "Penetration test failed: LLM request failed: RateLimitError"
+		exit 1
+		;;
+	vertex-primary-hallucinated-endpoint-fallback-success|target-path-src-default-source-dirs)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/hallucination-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-hallucinated/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-hallucinated/vulnerabilities/vuln-0001.md" <<'EOS'
+**Endpoint:** /api/ghost-admin
+EOS
+			echo "Penetration test failed: CRITICAL finding on /api/ghost-admin"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after hallucinated-endpoint fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: hallucinated-endpoint fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 26
+			;;
+		esac
+		;;
+	vertex-primary-existing-endpoint-nonrecoverable|multi-source-dirs-existing-endpoint)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/existing-endpoint-primary|vertex_ai/multi-dir-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-existing-endpoint/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-existing-endpoint/vulnerabilities/vuln-0001.md" <<'EOS'
+**Endpoint:** /api/status
+EOS
+			echo "Penetration test failed: CRITICAL finding on /api/status"
+			exit 1
+			;;
+		vertex_ai/fallback-one|vertex_ai/fallback-two)
+			echo "Error: existing endpoint findings must remain non-recoverable (${STRIX_LLM:-})" >&2
+			exit 27
+			;;
+		*)
+			echo "Error: existing-endpoint scenario unexpected model (${STRIX_LLM:-})" >&2
+			exit 28
+			;;
+		esac
+		;;
+	endpoint-in-excluded-dir)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/excluded-dir-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-excluded-dir/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-excluded-dir/vulnerabilities/vuln-0001.md" <<'EOS'
+**Endpoint:** /api/hidden-secret
+EOS
+			echo "Penetration test failed: CRITICAL finding on /api/hidden-secret"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after excluded-dir hallucination fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: excluded-dir scenario unexpected model (${STRIX_LLM:-})" >&2
+			exit 29
+			;;
+		esac
+		;;
+	empty-fallback-models)
+		# Output must match is_vertex_not_found_error() patterns so the gate
+		# proceeds to the fallback loop (where empty array triggers the message).
+		echo "Publisher Model vertex_ai/empty-fb-primary was not found in project."
+		exit 1
+		;;
+	high-vuln-below-threshold)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-high/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-high/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: HIGH
+EOS
+		echo "Penetration test failed: simulated high finding"
+		exit 1
+		;;
+	inline-medium-below-threshold)
+		echo "╭─ VULN-0001 ──────────────────────────────────────────────────────────────────╮"
+		echo "│  Vulnerability Report                                                        │"
+		echo "│  Severity: MEDIUM                                                            │"
+		echo "╰──────────────────────────────────────────────────────────────────────────────╯"
+		echo "Penetration test failed: simulated inline medium finding"
+		exit 2
+		;;
+	medium-vuln-default-threshold)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-medium-default/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-medium-default/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: MEDIUM
+EOS
+		echo "Penetration test failed: simulated medium finding"
+		exit 1
+		;;
+	critical-vuln-at-threshold)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-critical/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-critical/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+EOS
+		echo "Penetration test failed: simulated critical finding"
+		exit 1
+		;;
+	malformed-severity-marker-nonrecoverable)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-malformed/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-malformed/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity details: high confidence marker only
+EOS
+		echo "Penetration test failed: malformed severity marker"
+		exit 1
+		;;
+	model-disagreement-critical-in-earlier-report)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/model-a)
+			mkdir -p "$STRIX_REPORTS_DIR/run-001/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/run-001/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+EOS
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			echo "Penetration test failed: CRITICAL finding by model-a"
+			exit 1
+			;;
+		vertex_ai/model-b)
+			mkdir -p "$STRIX_REPORTS_DIR/run-002/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/run-002/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: LOW
+EOS
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			echo "Penetration test failed: LOW finding by model-b"
+			exit 1
+			;;
+		*)
+			echo "Error: model-disagreement unexpected model (${STRIX_LLM:-})" >&2
+			exit 32
+			;;
+		esac
+		;;
+	nonvertex-slash-model-not-rewritten)
+		if [ "${STRIX_LLM:-}" = "deepseek/models/deepseek-r1" ]; then
+			echo "scan ok with deepseek model passthrough"
+			exit 0
+		fi
+		echo "Error: deepseek model was rewritten (${STRIX_LLM:-})" >&2
+		exit 33
+		;;
+	preserve-existing-api-base)
+		if [ "${LLM_API_BASE:-}" = "https://preexisting.invalid" ]; then
+			echo "scan ok with preserved api base"
+			exit 0
+		fi
+		echo "Error: existing LLM_API_BASE was not preserved (${LLM_API_BASE:-<unset>})" >&2
+		exit 20
+		;;
+	default-fallback-order-fast-first)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/missing-primary)
+			echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+			echo '"status": "NOT_FOUND"'
+			exit 1
+			;;
+		vertex_ai/gemini-2.5-pro)
+			echo "scan ok with default fast fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: default fallback order unexpected (${STRIX_LLM:-})" >&2
+			exit 16
+			;;
+		esac
+		;;
+	vertex-primary-timeout-retry-same-model-success|vertex-primary-timeout-retry-reason-message)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/retry-timeout-primary)
+			echo "litellm.exceptions.Timeout: litellm.Timeout: Connection timed out after None seconds."
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after timeout fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: timeout fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 34
+			;;
+		esac
+		;;
+	all-fallbacks-same-as-primary)
+		# Bug 13: All fallback models are the same as the primary model.
+		# The gate should emit an ERROR and exit 1.
+		echo "Error: litellm.NotFoundError: Vertex_aiException - x"
+		echo '"status": "NOT_FOUND"'
+		exit 1
+		;;
+	vertex-primary-timeout-exhausted-fallback-success)
+		# Primary always times out (even after retries). Fallback succeeds.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/timeout-exhaust-primary)
+			echo "litellm.exceptions.Timeout: litellm.Timeout: Connection timed out after None seconds."
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after timeout-exhausted fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: timeout-exhausted-fallback unexpected model (${STRIX_LLM:-})" >&2
+			exit 35
+			;;
+		esac
+		;;
+	zero-findings-timeout-all-models)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/zero-timeout-primary|vertex_ai/fallback-one)
+			echo "╭─ STRIX ──────────────────────────────────────────────────────────────────────╮"
+			echo "│  Penetration test in progress                                                │"
+			echo "│  Vulnerabilities 0                                                           │"
+			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
+			sleep 2
+			exit 0
+			;;
+		*)
+			echo "Error: zero-findings-timeout unexpected model (${STRIX_LLM:-})" >&2
+			exit 57
+			;;
+		esac
+		;;
+	zero-findings-sticky-across-fallback)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/zero-sticky-primary)
+			echo "╭─ STRIX ──────────────────────────────────────────────────────────────────────╮"
+			echo "│  Penetration test in progress                                                │"
+			echo "│  Vulnerabilities 0                                                           │"
+			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
+			sleep 2
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			sleep 2
+			exit 0
+			;;
+		*)
+			echo "Error: zero-findings-sticky unexpected model (${STRIX_LLM:-})" >&2
+			exit 58
+			;;
+		esac
+		;;
+	zero-findings-with-low-report-timeout)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/zero-low-primary)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-zero-low/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-zero-low/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: LOW
+EOS
+			echo "╭─ STRIX ──────────────────────────────────────────────────────────────────────╮"
+			echo "│  Penetration test in progress                                                │"
+			echo "│  Vulnerabilities 0                                                           │"
+			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
+			sleep 2
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			sleep 2
+			exit 0
+			;;
+		*)
+			echo "Error: zero-findings-with-low-report unexpected model (${STRIX_LLM:-})" >&2
+			exit 59
+			;;
+		esac
+		;;
+	bare-timeout-with-provider-marker)
+		# Emit bare "Connection timed out" alongside a provider marker so
+		# is_timeout_error() matches the Tier 3 branch gated on
+		# LLM_PROVIDER_ONLY_REGEX.  Does NOT include
+		# litellm.exceptions.Timeout / httpx.ReadTimeout to ensure we
+		# exercise the provider-marker fallback path specifically.
+		# Primary times out; fallback model succeeds.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/bare-timeout-primary)
+			echo "Connection timed out"
+			echo "vertex_ai model invocation failed"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after bare-timeout fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: bare-timeout fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 47
+			;;
+		esac
+		;;
+	bare-timeout-no-provider-marker)
+		# Emit "Connection timed out" with transport library names (httpx,
+		# httpcore, requests) but WITHOUT any real LLM provider marker.
+		# is_timeout_error() Tier 3 uses LLM_PROVIDER_ONLY_REGEX which
+		# excludes transport libs, so this should NOT match.
+		echo "Connection timed out"
+		echo "httpx transport layer connection reset"
+		echo "httpcore pool timeout"
+		echo "requests transport timeout"
+		exit 1
+		;;
+	below-threshold-with-timeout)
+		# Produce a below-threshold (LOW) finding but also emit a timeout error
+		# so the infrastructure guard detects an incomplete scan.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-low-timeout/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-low-timeout/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: LOW
+EOS
+		echo "litellm.exceptions.Timeout: litellm.Timeout: Connection timed out after None seconds."
+		echo "Penetration test failed: simulated timeout with low finding"
+		exit 1
+		;;
+	below-threshold-with-ratelimit)
+		# Produce a below-threshold (LOW) finding but also emit a rate-limit error.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-low-ratelimit/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-low-ratelimit/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: LOW
+EOS
+		echo "Penetration test failed: LLM request failed: RateLimitError"
+		echo "Penetration test failed: simulated ratelimit with low finding"
+		exit 1
+		;;
+	below-threshold-with-connection-error)
+		# Produce a below-threshold (INFO) finding but also emit a
+		# ConnectionError WITH an LLM-provider context marker so the
+		# infrastructure guard detects an incomplete scan.
+		# The two-grep guard requires BOTH a transport error class AND an
+		# LLM_PROVIDER_ONLY_REGEX marker (litellm, openai, anthropic, etc.).
+		mkdir -p "$STRIX_REPORTS_DIR/fake-info-conn/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-info-conn/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: INFO
+EOS
+		echo "litellm.exceptions.APIConnectionError: ConnectionError - connection refused"
+		echo "Penetration test failed: simulated connection error with info finding"
+		exit 1
+		;;
+	below-threshold-with-connection-error-no-provider)
+		# Produce a below-threshold (INFO) finding and emit a ConnectionError
+		# WITHOUT any LLM-provider context marker.  The infra-error detector
+		# should NOT match because the log lacks provider markers like
+		# "litellm", "openai", "anthropic", etc.  This validates that the
+		# two-grep guard avoids false positives from target-application logs.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-info-conn-noprov/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-info-conn-noprov/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: INFO
+EOS
+		echo "ConnectionError: target server refused connection on port 8443"
+		echo "Penetration test failed: simulated app-level connection error"
+		exit 1
+		;;
+	below-threshold-with-requests-connection-error)
+		# Produce a below-threshold (INFO) finding with a
+		# requests.exceptions.ConnectionError — the transport library prefix
+		# "requests" matches the broad PROVIDER_CONTEXT_REGEX but is
+		# intentionally excluded from LLM_PROVIDER_ONLY_REGEX.
+		#
+		# Before commit 0e90d48, the connection-error path used
+		# has_provider_context_marker() (PROVIDER_CONTEXT_REGEX) and would
+		# have incorrectly classified this as an LLM infrastructure error.
+		# After that fix, LLM_PROVIDER_ONLY_REGEX is used, so "requests"
+		# alone does NOT satisfy the provider check → below-threshold bypass
+		# succeeds → exit 0.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-info-conn-requests/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-info-conn-requests/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: INFO
+EOS
+		echo "requests.exceptions.ConnectionError: HTTPSConnectionPool(host='api.example.com', port=443): Max retries exceeded with url: /v1/scan"
+		echo "Penetration test failed: simulated requests transport error"
+		exit 1
+		;;
+	below-threshold-with-midstream)
+		# Produce a below-threshold (MEDIUM) finding below CRITICAL threshold
+		# but also emit a MidStreamFallbackError.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-medium-midstream/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-medium-midstream/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: MEDIUM
+EOS
+		echo "Penetration test failed: LLM request failed: MidStreamFallbackError"
+		echo "Penetration test failed: simulated midstream with medium finding"
+		exit 1
+		;;
+	bare-timeout-provider-marker-exhausted-fallback)
+		# Bare "Connection timed out" + provider marker: primary fails once,
+		# then the gate falls back to fallback-one which succeeds.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/bare-timeout-exhaust-primary)
+			echo "Connection timed out"
+			echo "vertex_ai model invocation failed"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after bare-timeout-exhaust fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: bare-timeout-exhaust-fallback unexpected model (${STRIX_LLM:-})" >&2
+			exit 35
+			;;
+		esac
+		;;
+	httpx-read-timeout-with-provider-marker)
+		# Tier 2: httpx.ReadTimeout + provider-context marker (litellm).
+		# Primary times out; fallback model succeeds.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/httpx-timeout-primary)
+			echo "httpx.ReadTimeout: timed out"
+			echo "litellm.proxy: connection to upstream model failed"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after httpx-timeout fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: httpx-timeout fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 45
+			;;
+		esac
+		;;
+	httpx-read-timeout-no-provider-marker)
+		# Tier 2 negative: httpx.ReadTimeout WITHOUT any provider-context
+		# marker.  Should NOT be classified as retryable timeout.
+		echo "httpx.ReadTimeout: timed out"
+		echo "application server connection pool exhausted"
+		exit 1
+		;;
+	httpcore-read-timeout-with-provider-marker)
+		# Tier 2b: httpcore.ReadTimeout + provider-context marker.
+		# Primary times out; fallback model succeeds.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/httpcore-timeout-primary)
+			echo "httpcore.ReadTimeout: timed out"
+			echo "litellm.proxy: connection to upstream model failed"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "scan ok after httpcore-timeout fallback"
+			exit 0
+			;;
+		*)
+			echo "Error: httpcore-timeout fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 46
+			;;
+		esac
+		;;
+	httpcore-read-timeout-no-provider-marker)
+		# Tier 2b negative: httpcore.ReadTimeout WITHOUT any provider-context
+		# marker.  Should NOT be classified as retryable timeout.
+		echo "httpcore.ReadTimeout: timed out"
+		echo "application server connection pool exhausted"
+		exit 1
+		;;
+	infra-error-sticky-flag)
+		# Sticky flag test: first call hits infra error (rate limit),
+		# second call fails on the first fallback model but produces a
+		# LOW finding report.  After exhausting retries, the gate checks
+		# has_only_below_threshold_vulnerabilities — which finds LOW
+		# findings but sees INFRA_ERROR_DETECTED=1 (set from the first
+		# call's rate-limit error) and refuses the below-threshold bypass.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/sticky-flag-primary)
+			touch "$FAKE_STRIX_STATE_FILE"
+			echo "RateLimitError: rate limit exceeded"
+			echo "litellm.proxy: rate limit on vertex_ai model"
+			exit 1
+			;;
+		vertex_ai/gemini-2.5-pro)
+			mkdir -p "$STRIX_REPORTS_DIR/run-sticky/vulnerabilities"
+			cat > "$STRIX_REPORTS_DIR/run-sticky/vulnerabilities/vuln-0001.md" <<'FINDINGS'
+Severity: LOW
+FINDINGS
+			echo "non-retryable scan error with partial results"
+			exit 1
+			;;
+		*)
+			echo "Error: infra-error-sticky-flag unexpected model (${STRIX_LLM:-})" >&2
+			exit 35
+			;;
+		esac
+		;;
+	pr-baseline-critical-unchanged)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java:5
+EOS
+		echo "Penetration test failed: baseline critical finding"
+		exit 1
+		;;
+	pr-critical-changed)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java:12
+EOS
+		echo "Penetration test failed: changed critical finding"
+		exit 1
+		;;
+	pr-critical-unmapped)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-unmapped/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-unmapped/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Description: location data unavailable
+EOS
+		echo "Penetration test failed: unmapped critical finding"
+		exit 1
+		;;
+	pr-baseline-critical-absolute-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-absolute/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-absolute/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** File: /workspace/smart-crawling-server/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java
+EOS
+		echo "Penetration test failed: baseline critical finding with absolute target"
+		exit 1
+		;;
+	pr-baseline-critical-subdir-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-subdir/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-subdir/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** File: /workspace/flyway/V16__hash_oauth2_registered_client_secret.sql
+EOS
+		echo "Penetration test failed: baseline critical finding with narrowed subdir target"
+		exit 1
+		;;
+	pr-baseline-critical-subdir-boxed-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-boxed-target/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-boxed-target/vulnerabilities/vuln-0001.md" <<'EOS'
+│  Severity: CRITICAL                                                          │
+│  Target: /workspace/flyway/V16__hash_oauth2_registered_client_secret.sql     │
+│  Endpoint: N/A (database migration script)                                   │
+EOS
+		echo "Penetration test failed: baseline critical finding with boxed narrowed subdir target"
+		exit 1
+		;;
+	pr-baseline-critical-subdir-endpoint)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-endpoint/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-endpoint/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** Local Codebase: /workspace/flyway
+**Endpoint:** /workspace/flyway/V16__hash_oauth2_registered_client_secret.sql
+EOS
+		echo "Penetration test failed: baseline critical finding with narrowed subdir endpoint"
+		exit 1
+		;;
+	pr-baseline-critical-subdir-endpoint-bare-filename)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-endpoint-bare-filename/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-endpoint-bare-filename/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** Local Codebase: /workspace/flyway
+**Endpoint:** V16__hash_oauth2_registered_client_secret.sql
+EOS
+		echo "Penetration test failed: baseline critical finding with narrowed subdir bare filename endpoint"
+		exit 1
+		;;
+	pr-baseline-critical-subdir-narrative-backticked-file)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-narrative-backticked-file/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-baseline-subdir-narrative-backticked-file/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** Local Codebase: /workspace/flyway
+The issue appears in file `V4__ccf_scenario.sql`.
+EOS
+		echo "Penetration test failed: baseline critical finding with narrowed subdir narrative backticked file"
+		exit 1
+		;;
+	pr-critical-relative-path-escape-subdir-narrative-backticked-file)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-relative-path-escape-subdir-narrative/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-relative-path-escape-subdir-narrative/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** Local Codebase: /workspace/flyway
+The issue appears in file `../V24__update_search_expression_team_keyword_id.sql`.
+EOS
+		echo "Penetration test failed: relative path escape critical finding with narrowed subdir narrative backticked file"
+		exit 1
+		;;
+	pr-critical-changed-absolute-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed-absolute/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-changed-absolute/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** File: /workspace/smart-crawling-server/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java
+EOS
+		echo "Penetration test failed: changed critical finding with absolute target"
+		exit 1
+		;;
+	pr-critical-changed-subdir-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed-subdir/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-changed-subdir/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** File: /workspace/flyway/V24__update_search_expression_team_keyword_id.sql
+EOS
+		echo "Penetration test failed: changed critical finding with narrowed subdir target"
+		exit 1
+		;;
+	pr-critical-changed-subdir-endpoint)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed-subdir-endpoint/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-changed-subdir-endpoint/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** Local Codebase: /workspace/flyway
+**Endpoint:** /workspace/flyway/V24__update_search_expression_team_keyword_id.sql
+EOS
+		echo "Penetration test failed: changed critical finding with narrowed subdir endpoint"
+		exit 1
+		;;
+	pr-critical-path-escape-subdir-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-path-escape-subdir/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-path-escape-subdir/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** File: /workspace/flyway/../../../../../smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java
+EOS
+		echo "Penetration test failed: path escape critical finding with narrowed subdir target"
+		exit 1
+		;;
+	pr-critical-unmapped-narrative-target)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-unmapped-narrative/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-unmapped-narrative/vulnerabilities/vuln-0001.md" <<'EOS'
+**Severity:** CRITICAL
+**Target:** Multiple files in the codebase, particularly `org.empasy.sync.common.system.util.JwtUtil.java` (for signing) and its callers.
+EOS
+		echo "Penetration test failed: unmapped narrative critical finding"
+		exit 1
+		;;
+	pr-critical-unmapped-other-workspace-repo)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-other-workspace-repo/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-other-workspace-repo/vulnerabilities/vuln-0001.md" <<'EOS'
+	**Severity:** CRITICAL
+	**Target:** File: /workspace/other-repo/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java
+EOS
+		echo "Penetration test failed: other workspace repo target"
+		exit 1
+		;;
+	pr-critical-manifest-only-pom|pr-critical-manifest-only-pom-test-override|pr-critical-manifest-only-pom-same-head-different-pr|pr-critical-manifest-only-pom-current-pr-authoritative)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-manifest-only/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-pr-manifest-only/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+pom.xml:8
+EOS
+		echo "Penetration test failed: manifest-only critical finding"
+		exit 1
+		;;
+	pr-critical-manifest-only-pom-after-fallback-authoritative)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/timeout-primary)
+			echo "litellm.exceptions.Timeout: primary model timed out"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-pr-manifest-only-after-fallback/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-pr-manifest-only-after-fallback/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+pom.xml:8
+EOS
+			echo "Penetration test failed: manifest-only critical finding after fallback"
+			exit 1
+			;;
+		*)
+			echo "Error: pr-critical-manifest-only-pom-after-fallback-authoritative unexpected model (${STRIX_LLM:-})" >&2
+			exit 53
+			;;
+		esac
+		;;
+	pr-critical-manifest-only-pom-console-only-after-fallback-authoritative)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/timeout-primary)
+			echo "litellm.exceptions.Timeout: primary model timed out"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "Severity: CRITICAL"
+			echo "Location 1:"
+			echo "pom.xml:59"
+			echo "Penetration test failed: manifest-only critical finding after fallback (console-only)"
+			exit 1
+			;;
+		*)
+			echo "Error: pr-critical-manifest-only-pom-console-only-after-fallback-authoritative unexpected model (${STRIX_LLM:-})" >&2
+			exit 54
+			;;
+		esac
+		;;
+	pr-critical-manifest-only-pom-console-target-only-after-fallback-authoritative)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/timeout-primary)
+			echo "litellm.exceptions.Timeout: primary model timed out"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			echo "Severity: CRITICAL"
+			echo "Target: /workspace/$(basename "$target_path")/pom.xml"
+			echo "Penetration test failed: manifest-only critical finding after fallback (console target-only)"
+			exit 1
+			;;
+		*)
+			echo "Error: pr-critical-manifest-only-pom-console-target-only-after-fallback-authoritative unexpected model (${STRIX_LLM:-})" >&2
+			exit 56
+			;;
+		esac
+		;;
+	pr-low-markdown-plus-console-critical-manifest-after-fallback-authoritative)
+		case "${STRIX_LLM:-}" in
+		vertex_ai/timeout-primary)
+			echo "litellm.exceptions.Timeout: primary model timed out"
+			exit 1
+			;;
+		vertex_ai/fallback-one)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-pr-manifest-mixed-after-fallback/vulnerabilities"
+			cat >"$STRIX_REPORTS_DIR/fake-pr-manifest-mixed-after-fallback/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: LOW
+Location 1:
+pom.xml:8
+EOS
+			echo "Severity: CRITICAL"
+			echo "Location 1:"
+			echo "pom.xml:59"
+			echo "Penetration test failed: manifest-only critical finding after fallback (mixed file+console)"
+			exit 1
+			;;
+		*)
+			echo "Error: pr-low-markdown-plus-console-critical-manifest-after-fallback-authoritative unexpected model (${STRIX_LLM:-})" >&2
+			exit 55
+			;;
+		esac
+		;;
+	pr-changed-scope-bounded)
+		if [ -z "$target_path" ]; then
+			echo "Error: target path missing" >&2
+			exit 41
+		fi
+		if [ ! -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ]; then
+			echo "Error: changed file missing from bounded target path ($target_path)" >&2
+			exit 42
+		fi
+		if [ -e "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
+			echo "Error: unrelated file leaked into bounded target path ($target_path)" >&2
+			exit 43
+		fi
+		echo "scan ok with bounded changed-file scope"
+		exit 0
+		;;
+	pr-python-scope-context)
+		if [ ! -f "$target_path/backend/api/emails.py" ]; then
+			echo "Error: changed backend file missing from scoped target ($target_path)" >&2
+			exit 57
+		fi
+		if [ ! -f "$target_path/backend/core/config.py" ]; then
+			echo "Error: backend core config context missing from scoped target ($target_path)" >&2
+			exit 58
+		fi
+		if [ ! -f "$target_path/backend/db/session.py" ]; then
+			echo "Error: backend db session context missing from scoped target ($target_path)" >&2
+			exit 59
+		fi
+		if [ ! -f "$target_path/backend/services/exceptions.py" ]; then
+			echo "Error: backend service exceptions context missing from scoped target ($target_path)" >&2
+			exit 60
+		fi
+		echo "scan ok with python dependency scope"
+		exit 0
+		;;
+	pr-changed-scope-batched)
+		attempt="0"
+		if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+			attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+		fi
+		attempt="$((attempt + 1))"
+		echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+		if [ "$attempt" -eq 1 ]; then
+			if [ ! -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ]; then
+				echo "Error: full-set scope missing controller file ($target_path)" >&2
+				exit 44
+			fi
+			if [ ! -f "$target_path/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java" ]; then
+				echo "Error: full-set scope missing playwright file ($target_path)" >&2
+				exit 45
+			fi
+			if [ ! -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ]; then
+				echo "Error: full-set scope missing service impl file ($target_path)" >&2
+				exit 46
+			fi
+			echo "scan ok with full changed-file scope"
+			exit 0
+		fi
+		echo "Error: unexpected batch attempt $attempt" >&2
+		exit 50
+		;;
+	pr-changed-scope-max-batches)
+		attempt="0"
+		if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+			attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+		fi
+		attempt="$((attempt + 1))"
+		echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+		if [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
+			echo "Error: PR changed-file scope was not split by STRIX_PR_SCOPE_MAX_FILES_PER_BATCH" >&2
+			exit 53
+		fi
+		if [ "$attempt" -eq 1 ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java" ] && \
+		   [ ! -e "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
+		   [ ! -e "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
+			echo "scan ok with first configured max-size batch"
+			exit 0
+		fi
+		if [ "$attempt" -eq 2 ] && \
+		   [ ! -e "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ] && \
+		   [ ! -e "$target_path/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
+			echo "scan ok with second configured max-size batch"
+			exit 0
+		fi
+		echo "Error: unexpected configured max-size batch layout attempt $attempt ($target_path)" >&2
+		exit 54
+		;;
+	pr-changed-scope-includes-ci-dependency)
+		if [ -f "$target_path/scripts/ci/strix_quick_gate.sh" ] && [ -f "$target_path/scripts/ci/strix_model_utils.sh" ]; then
+			echo "scan ok with CI support dependency"
+			exit 0
+		fi
+		echo "Error: PR changed-file scope missing CI support dependency ($target_path)" >&2
+		exit 55
+		;;
+	pr-changed-scope-rebalanced)
+		if [ -z "$target_path" ]; then
+			echo "Error: target path missing" >&2
+			exit 51
+		fi
+		if [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
+			exit 124
+		fi
+		if [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java" ] && \
+		   [ ! -e "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
+		   [ ! -e "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
+			echo "scan ok after rebalance (first half)"
+			exit 0
+		fi
+		if [ ! -e "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java" ] && \
+		   [ ! -e "$target_path/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
+		   [ -f "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
+			echo "scan ok after rebalance (second half)"
+			exit 0
+		fi
+		echo "Error: unexpected rebalance target layout ($target_path)" >&2
+		exit 52
+		;;
+	*)
+		echo "unknown scenario ${FAKE_STRIX_SCENARIO:?}" >&2
+		exit 8
+		;;
+esac
+EOF
+	chmod +x "$fake_strix"
+
+	cat >"$fake_gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "${GH_TOKEN-<unset>}" >> "${FAKE_GH_TOKEN_LOG:?}"
+
+if [ "${1-}" != "api" ]; then
+	echo "unexpected gh command: $*" >&2
+	exit 90
+fi
+
+if [ -z "${FAKE_GH_API_RESPONSE_FILE:-}" ]; then
+	echo "missing FAKE_GH_API_RESPONSE_FILE" >&2
+	exit 91
+fi
+
+cat -- "${FAKE_GH_API_RESPONSE_FILE}"
+EOF
+	chmod +x "$fake_gh"
+
+	local effective_event_name="$github_event_name"
+	if [ -z "$effective_event_name" ]; then
+		effective_event_name="$event_name_override"
+	fi
+
+	# Scenario-specific source-tree setup so is_hallucinated_endpoint_finding()
+	# can locate "real" endpoints inside the self-contained temp workspace.
+	if [ "$effective_event_name" = "pull_request" ]; then
+		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller"
+		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl"
+		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service"
+		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util"
+		echo '<project />' >"$repo_root_dir/pom.xml"
+		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-server/src/main/resources/flyway"
+		echo 'class ChangedController {}' >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		echo 'class BaselineUserService {}' >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java"
+		echo 'class ChangedPlaywright {}' >"$repo_root_dir/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java"
+		echo 'class ChangedJwtUtil {}' >"$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java"
+		if [ -n "$current_pr_number" ]; then
+			cat >"$event_payload_file" <<EOF
+{
+  "pull_request": {
+    "number": $current_pr_number,
+    "base": {
+      "sha": "test-base-sha"
+    },
+    "head": {
+      "sha": "test-head-sha"
+    }
+  }
+}
+EOF
+		fi
+		echo '-- older flyway file' >"$repo_root_dir/sync-module-system/smart-crawling-server/src/main/resources/flyway/V4__ccf_scenario.sql"
+		echo '-- legacy flyway file' >"$repo_root_dir/sync-module-system/smart-crawling-server/src/main/resources/flyway/V16__hash_oauth2_registered_client_secret.sql"
+		echo '-- changed flyway file' >"$repo_root_dir/sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql"
+	fi
+
+	if [ "$scenario" = "vertex-primary-existing-endpoint-nonrecoverable" ]; then
+		echo 'GET /api/status' >"$repo_root_dir/src/routes.txt"
+	elif [ "$scenario" = "multi-source-dirs-existing-endpoint" ]; then
+		# Endpoint lives in api/ (not src/), validating multi-dir scanning.
+		mkdir -p "$repo_root_dir/api"
+		echo 'GET /api/status' >"$repo_root_dir/api/routes.txt"
+	elif [ "$scenario" = "endpoint-in-excluded-dir" ]; then
+		# Endpoint /api/hidden-secret exists ONLY inside excluded directories
+		# (.git/ and node_modules/). The grep excludes must prevent matching,
+		# so the finding is treated as hallucinated → fallback allowed.
+		mkdir -p "$repo_root_dir/.git/refs"
+		echo 'GET /api/hidden-secret' >"$repo_root_dir/.git/refs/leaked.txt"
+		mkdir -p "$repo_root_dir/node_modules/fake-pkg"
+		echo 'GET /api/hidden-secret' >"$repo_root_dir/node_modules/fake-pkg/index.js"
+	elif [ "$scenario" = "pr-changed-scope-bounded" ]; then
+		echo 'class Unrelated {}' >"$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java"
+	elif [ "$scenario" = "pr-python-scope-context" ]; then
+		mkdir -p "$repo_root_dir/backend/api" "$repo_root_dir/backend/core" "$repo_root_dir/backend/db" "$repo_root_dir/backend/services"
+		touch "$repo_root_dir/backend/api/__init__.py"
+		touch "$repo_root_dir/backend/core/__init__.py"
+		touch "$repo_root_dir/backend/db/__init__.py"
+		touch "$repo_root_dir/backend/services/__init__.py"
+		echo 'from db.session import get_db' >"$repo_root_dir/backend/api/emails.py"
+		echo 'TRUSTED_CONFIG = True' >"$repo_root_dir/backend/core/config.py"
+		echo 'class LocalError(Exception): pass' >"$repo_root_dir/backend/core/exceptions.py"
+		echo 'engine = object()' >"$repo_root_dir/backend/db/session.py"
+		echo 'class Email: pass' >"$repo_root_dir/backend/db/models.py"
+		echo 'class ServiceError(Exception): pass' >"$repo_root_dir/backend/services/exceptions.py"
+		echo 'async def extract_backup_async(*args): return []' >"$repo_root_dir/backend/services/archive.py"
+		echo 'def parse_eml(*args): return {}' >"$repo_root_dir/backend/services/email_parser.py"
+		echo 'async def generate_embeddings(*args): return []' >"$repo_root_dir/backend/services/embedding.py"
+		echo 'async def assign_thread_id(*args, **kwargs): return "thread"' >"$repo_root_dir/backend/services/threading_service.py"
+		echo 'async def send_email(*args, **kwargs): return None' >"$repo_root_dir/backend/services/email_client.py"
+		echo 'pytest==0' >"$repo_root_dir/backend/requirements.txt"
+	fi
+
+	set +e
+	local env_cmd=(
+		PATH="$bin_dir:$PATH"
+		GITHUB_EVENT_NAME=""
+		GITHUB_EVENT_PATH=""
+		FAKE_STRIX_SCENARIO="$scenario"
+		FAKE_STRIX_CALL_LOG="$call_log"
+		FAKE_STRIX_API_BASE_LOG="$api_base_log"
+		FAKE_STRIX_TARGET_LOG="$target_log"
+		FAKE_STRIX_RUNTIME_ENV_LOG="$runtime_env_log"
+		STRIX_LLM_DEFAULT_PROVIDER="$default_provider"
+		FAKE_STRIX_STATE_FILE="$state_file"
+		STRIX_TRANSIENT_RETRY_PER_MODEL="$transient_retry_per_model"
+		STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="$transient_retry_backoff_seconds"
+		STRIX_PROCESS_TIMEOUT_SECONDS="$process_timeout_seconds"
+		STRIX_TOTAL_TIMEOUT_SECONDS="$total_timeout_seconds"
+		STRIX_FAIL_ON_MIN_SEVERITY="$min_fail_severity"
+		STRIX_REPORTS_DIR="$repo_root_dir/strix_runs"
+		STRIX_TARGET_PATH="$effective_target_path"
+	)
+	if [ "$scenario" = "runtime-env-forwarding" ]; then
+		env_cmd+=(
+			LLM_TIMEOUT="90"
+			STRIX_MEMORY_COMPRESSOR_TIMEOUT="10"
+			STRIX_REASONING_EFFORT="minimal"
+			STRIX_LLM_MAX_RETRIES="1"
+			GEMINI_LOCATION="GLOBAL"
+			UNRELATED_SECRET="should-not-forward"
+		)
+	fi
+	if [ "$min_fail_severity" = "__UNSET__" ]; then
+		local next_env_cmd=()
+		local env_pair
+		for env_pair in "${env_cmd[@]}"; do
+			case "$env_pair" in
+			STRIX_FAIL_ON_MIN_SEVERITY=*)
+				continue
+				;;
+			esac
+			next_env_cmd+=("$env_pair")
+		done
+		env_cmd=("${next_env_cmd[@]}")
+	fi
+	printf '%s' "$initial_model" >"$strix_llm_file"
+	env_cmd+=(STRIX_LLM_FILE="$strix_llm_file")
+	printf '%s' 'dummy' >"$llm_api_key_file"
+	env_cmd+=(LLM_API_KEY_FILE="$llm_api_key_file")
+	env_cmd+=(STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping")
+	local llm_api_base_source="$raw_llm_api_base"
+	if [ -z "$llm_api_base_source" ] && [ -n "$initial_llm_api_base" ]; then
+		llm_api_base_source="$initial_llm_api_base"
+	fi
+	if [ -n "$llm_api_base_source" ]; then
+		printf '%s' "$llm_api_base_source" >"$llm_api_base_file"
+		env_cmd+=(LLM_API_BASE_FILE="$llm_api_base_file")
+	fi
+	# Only export fallback variables when a non-empty value is provided so the
+	# gate's ${VAR+x} checks correctly distinguish "unset → use defaults" from
+	# "set to empty → disable fallbacks".
+	if [ -n "$fallback_models" ]; then
+		env_cmd+=(STRIX_VERTEX_FALLBACK_MODELS="$fallback_models")
+	fi
+	case "$gemini_fallback_models" in
+	__SAME_AS_FALLBACK_MODELS__)
+		if [ -n "$fallback_models" ]; then
+			env_cmd+=(STRIX_GEMINI_FALLBACK_MODELS="$fallback_models")
+		fi
+		;;
+	__UNSET__)
+		;;
+	*)
+		if [ -n "$gemini_fallback_models" ]; then
+			env_cmd+=(STRIX_GEMINI_FALLBACK_MODELS="$gemini_fallback_models")
+		fi
+		;;
+	esac
+	if [ -n "$generic_fallback_models" ]; then
+		env_cmd+=(STRIX_FALLBACK_MODELS="$generic_fallback_models")
+	fi
+	if [ -n "$custom_source_dirs" ]; then
+		env_cmd+=(STRIX_SOURCE_DIRS="$custom_source_dirs")
+	fi
+	if [ -n "$pr_scope_max_files_per_batch" ]; then
+		env_cmd+=(STRIX_PR_SCOPE_MAX_FILES_PER_BATCH="$pr_scope_max_files_per_batch")
+	fi
+	if [ -n "$github_event_name" ]; then
+		env_cmd+=(GITHUB_EVENT_NAME="$github_event_name")
+	fi
+	if [ -n "$event_name_override" ]; then
+		env_cmd+=(EVENT_NAME="$event_name_override")
+	fi
+	if [ -n "$test_pr_sca_status_override" ]; then
+		env_cmd+=(STRIX_TEST_PR_SCA_STATUS_OVERRIDE="$test_pr_sca_status_override")
+	fi
+	if [ -n "$current_pr_number" ]; then
+		env_cmd+=(GITHUB_EVENT_PATH="$event_payload_file")
+		env_cmd+=(GITHUB_REPOSITORY="octo-org/smart-crawling-server")
+		env_cmd+=(PR_BASE_SHA="test-base-sha")
+		env_cmd+=(PR_HEAD_SHA="test-head-sha")
+		env_cmd+=(GH_TOKEN="ghs_test_token")
+	fi
+	if [ -n "$authoritative_sca_runs_json" ]; then
+		local gh_api_response_file="$tmp_dir/gh-api-response.json"
+		printf '%s\n' "$authoritative_sca_runs_json" >"$gh_api_response_file"
+		env_cmd+=(FAKE_GH_API_RESPONSE_FILE="$gh_api_response_file")
+		env_cmd+=(FAKE_GH_TOKEN_LOG="$gh_token_log")
+	fi
+	if [ "$changed_files_override" = "__SET_EMPTY__" ]; then
+		env_cmd+=(STRIX_TEST_CHANGED_FILES_OVERRIDE="")
+	elif [ -n "$changed_files_override" ]; then
+		env_cmd+=(STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_files_override")
+	fi
+	(
+		cd "$repo_root_dir"
+		env \
+			-u GITHUB_EVENT_NAME \
+			-u GITHUB_EVENT_PATH \
+			-u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			-u STRIX_VERTEX_FALLBACK_MODELS \
+			-u STRIX_GEMINI_FALLBACK_MODELS \
+			-u STRIX_FALLBACK_MODELS \
+			"${env_cmd[@]}" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "$expected_exit" "$rc" "scenario=$scenario exit code"
+
+	if [ -n "$expected_message" ]; then
+		assert_file_contains "$output_log" "$expected_message" "scenario=$scenario output"
+	fi
+
+	local call_count
+	call_count="0"
+	if [ -f "$call_log" ]; then
+		call_count="$(wc -l <"$call_log" | tr -d ' ')"
+	fi
+	assert_equals "$expected_calls" "$call_count" "scenario=$scenario strix call count"
+
+	if [ -n "$expected_model_sequence" ]; then
+		local actual_model_sequence=""
+		if [ -f "$call_log" ]; then
+			while IFS= read -r model; do
+				if [ -n "$actual_model_sequence" ]; then
+					actual_model_sequence="${actual_model_sequence}|$model"
+				else
+					actual_model_sequence="$model"
+				fi
+			done <"$call_log"
+		fi
+
+		assert_equals "$expected_model_sequence" "$actual_model_sequence" "scenario=$scenario STRIX_LLM sequence"
+	fi
+
+	if [ -n "$expected_api_base_sequence" ]; then
+		local actual_api_base_sequence=""
+		if [ -f "$api_base_log" ]; then
+			while IFS= read -r api_base; do
+				if [ -n "$actual_api_base_sequence" ]; then
+					actual_api_base_sequence="${actual_api_base_sequence}|$api_base"
+				else
+					actual_api_base_sequence="$api_base"
+				fi
+			done <"$api_base_log"
+		fi
+
+		assert_equals "$expected_api_base_sequence" "$actual_api_base_sequence" "scenario=$scenario LLM_API_BASE sequence"
+	fi
+
+	if [ "$scenario" = "runtime-env-forwarding" ]; then
+		assert_file_contains \
+			"$runtime_env_log" \
+			"LLM_TIMEOUT=90;STRIX_MEMORY_COMPRESSOR_TIMEOUT=10;STRIX_REASONING_EFFORT=minimal;STRIX_LLM_MAX_RETRIES=1;GEMINI_LOCATION=GLOBAL;UNRELATED_SECRET=<unset>" \
+			"scenario=$scenario runtime env forwarding"
+	fi
+
+	if [ "$scenario" = "pr-changed-scope-max-batches" ]; then
+		assert_internal_pr_scope_targets "$target_log" "$repo_root_dir" "$expected_calls"
+	fi
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_head_scope_case() {
+	local case_name="$1"
+	local changed_file="$2"
+	local base_content="$3"
+	local head_content="$4"
+	local disable_pr_scoping="${5-0}"
+
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+target_path=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
+		target_path="$2"
+		break
+	fi
+	shift
+done
+
+scoped_file="$target_path/${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}"
+if [ ! -f "$scoped_file" ]; then
+	echo "Error: PR head scoped file missing ($scoped_file)" >&2
+	exit 61
+fi
+if ! grep -Fq -- "${FAKE_STRIX_EXPECTED_HEAD_CONTENT:?}" "$scoped_file"; then
+	echo "Error: PR head scoped file did not contain head content" >&2
+	cat -- "$scoped_file" >&2
+	exit 62
+fi
+if [ -n "${FAKE_STRIX_UNEXPECTED_BASE_CONTENT:-}" ] && grep -Fq -- "$FAKE_STRIX_UNEXPECTED_BASE_CONTENT" "$scoped_file"; then
+	echo "Error: PR head scoped file leaked base checkout content" >&2
+	cat -- "$scoped_file" >&2
+	exit 63
+fi
+echo "scan ok with PR head content"
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		echo 'seed' >README.md
+		if [ "$base_content" != "__ABSENT__" ]; then
+			mkdir -p "$(dirname -- "$changed_file")"
+			printf '%s\n' "$base_content" >"$changed_file"
+		fi
+		git add .
+		git commit -qm 'base commit'
+	)
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		mkdir -p "$(dirname -- "$changed_file")"
+		printf '%s\n' "$head_content" >"$changed_file"
+		git add .
+		git commit -qm 'head commit'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	local unexpected_base_content=""
+	if [ "$base_content" != "__ABSENT__" ]; then
+		unexpected_base_content="$base_content"
+	fi
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			FAKE_STRIX_EXPECTED_CHANGED_FILE="$changed_file" \
+			FAKE_STRIX_EXPECTED_HEAD_CONTENT="$head_content" \
+			FAKE_STRIX_UNEXPECTED_BASE_CONTENT="$unexpected_base_content" \
+			STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "case=$case_name exit code"
+	assert_file_contains "$output_log" "scan ok with PR head content" "case=$case_name output"
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_trusted_context_scope_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	local changed_file="backend/api/emails.py"
+	local context_file="backend/core/config.py"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+target_path=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
+		target_path="$2"
+		break
+	fi
+	shift
+done
+
+changed_file="$target_path/${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}"
+context_file="$target_path/${FAKE_STRIX_EXPECTED_CONTEXT_FILE:?}"
+if ! grep -Fq -- "${FAKE_STRIX_EXPECTED_HEAD_CONTENT:?}" "$changed_file"; then
+	echo "Error: PR head changed file content was not scanned" >&2
+	cat -- "$changed_file" >&2
+	exit 65
+fi
+if ! grep -Fq -- "${FAKE_STRIX_EXPECTED_TRUSTED_CONTEXT:?}" "$context_file"; then
+	echo "Error: trusted backend context content missing" >&2
+	cat -- "$context_file" >&2
+	exit 66
+fi
+if grep -Fq -- "${FAKE_STRIX_UNTRUSTED_CONTEXT:?}" "$context_file"; then
+	echo "Error: PR head context leaked into trusted context scope" >&2
+	cat -- "$context_file" >&2
+	exit 67
+fi
+echo "scan ok with trusted backend context"
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		mkdir -p "$(dirname -- "$changed_file")" "$(dirname -- "$context_file")"
+		printf '%s\n' 'BASE_CHANGED_CONTENT_SHOULD_NOT_BE_SCANNED' >"$changed_file"
+		printf '%s\n' 'TRUSTED_BASE_CONTEXT_SHOULD_BE_SCANNED' >"$context_file"
+		git add .
+		git commit -qm 'base commit'
+	)
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		printf '%s\n' 'HEAD_CHANGED_CONTENT_SHOULD_BE_SCANNED' >"$changed_file"
+		printf '%s\n' 'UNTRUSTED_HEAD_CONTEXT_SHOULD_NOT_BE_SCANNED' >"$context_file"
+		git add .
+		git commit -qm 'head commit'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH \
+			PATH="$bin_dir:$PATH" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
+			FAKE_STRIX_EXPECTED_CHANGED_FILE="$changed_file" \
+			FAKE_STRIX_EXPECTED_CONTEXT_FILE="$context_file" \
+			FAKE_STRIX_EXPECTED_HEAD_CONTENT="HEAD_CHANGED_CONTENT_SHOULD_BE_SCANNED" \
+			FAKE_STRIX_EXPECTED_TRUSTED_CONTEXT="TRUSTED_BASE_CONTEXT_SHOULD_BE_SCANNED" \
+			FAKE_STRIX_UNTRUSTED_CONTEXT="UNTRUSTED_HEAD_CONTEXT_SHOULD_NOT_BE_SCANNED" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "case=pull-request-target-backend-context-uses-trusted-checkout exit code"
+	assert_file_contains "$output_log" "scan ok with trusted backend context" "case=pull-request-target-backend-context-uses-trusted-checkout output"
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_aborts_on_pr_head_blob_failure_case() {
+	local case_name="$1"
+	local changed_file="$2"
+	local base_content="$3"
+	local head_content="$4"
+	local fake_git_fail_command="$5"
+	local disable_pr_scoping="${6-0}"
+	local expected_exit="1"
+	if [ "$fake_git_fail_command" = "ls-tree" ] || [ "$fake_git_fail_command" = "diff" ] || [ "$disable_pr_scoping" = "1" ]; then
+		expected_exit="2"
+	fi
+	local expected_message="pull request changed file could not be read from PR head; failing closed"
+	if [ "$fake_git_fail_command" = "diff" ]; then
+		expected_message="pull request changed file list could not be read; failing closed"
+	fi
+
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	local real_git
+	real_git="$(command -v git)"
+	local fake_git="$bin_dir/git"
+	cat >"$fake_git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "show" ]; then
+	printf 'PARTIAL_PR_HEAD_BLOB_SHOULD_BE_DISCARDED'
+	exit 1
+fi
+if [ "${1:-}" = "${FAKE_GIT_FAIL_COMMAND:-}" ]; then
+	printf 'FAILED_PR_HEAD_LOOKUP_SHOULD_FAIL_CLOSED'
+	exit 1
+fi
+exec "${REAL_GIT_PATH:?}" "$@"
+EOF
+	chmod +x "$fake_git"
+
+	local fake_strix="$bin_dir/strix"
+	local call_log="$tmp_dir/calls.log"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
+echo "Error: Strix should not run after a PR-head blob failure" >&2
+exit 64
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		echo 'seed' >README.md
+		if [ "$base_content" != "__ABSENT__" ]; then
+			mkdir -p "$(dirname -- "$changed_file")"
+			printf '%s\n' "$base_content" >"$changed_file"
+		fi
+		git add .
+		git commit -qm 'base commit'
+	)
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		mkdir -p "$(dirname -- "$changed_file")"
+		printf '%s\n' "$head_content" >"$changed_file"
+		git add .
+		git commit -qm 'head commit'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			REAL_GIT_PATH="$real_git" \
+			FAKE_GIT_FAIL_COMMAND="$fake_git_fail_command" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			FAKE_STRIX_CALL_LOG="$call_log" \
+			STRIX_DISABLE_PR_SCOPING="$disable_pr_scoping" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "$expected_exit" "$rc" "case=$case_name PR-head blob failure exits closed"
+	assert_file_contains "$output_log" "$expected_message" "case=$case_name PR-head failure output"
+	local call_count="0"
+	if [ -f "$call_log" ]; then
+		call_count="$(wc -l <"$call_log" | tr -d ' ')"
+	fi
+	assert_equals "0" "$call_count" "case=$case_name PR-head blob failure must not invoke Strix"
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_irregular_head_entry_fails_closed_case() {
+	local case_name="$1"
+	local changed_file="$2"
+
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	local fake_strix="$bin_dir/strix"
+	local call_log="$tmp_dir/calls.log"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
+echo "Error: Strix should not run after an irregular PR-head entry" >&2
+exit 66
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		echo 'seed' >README.md
+		mkdir -p "$(dirname -- "$changed_file")"
+		printf '%s\n' 'BASE_CONTENT_SHOULD_NOT_BE_SCANNED' >"$changed_file"
+		git add .
+		git commit -qm 'base commit'
+	)
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		rm -f -- "$changed_file"
+		ln -s ../outside-secret "$changed_file"
+		git add .
+		git commit -qm 'head symlink commit'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			FAKE_STRIX_CALL_LOG="$call_log" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "2" "$rc" "case=$case_name irregular PR-head entry exits closed"
+	assert_file_contains "$output_log" "pull request changed file is not a regular PR-head file; failing closed" "case=$case_name output"
+	local call_count="0"
+	if [ -f "$call_log" ]; then
+		call_count="$(wc -l <"$call_log" | tr -d ' ')"
+	fi
+	assert_equals "0" "$call_count" "case=$case_name irregular PR-head entry must not invoke Strix"
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_rejects_unsafe_changed_path_case() {
+	local case_name="$1"
+	local changed_file="$2"
+
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	local fake_strix="$bin_dir/strix"
+	local call_log="$tmp_dir/calls.log"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	local event_payload_file="$tmp_dir/github_event.json"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
+echo "Error: Strix should not run for unsafe changed paths" >&2
+exit 65
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+	cat >"$event_payload_file" <<'EOF'
+{
+  "pull_request": {
+    "base": {"sha": "base-sha"},
+    "head": {"sha": "head-sha"}
+  }
+}
+EOF
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u STRIX_TEST_PR_SCA_STATUS_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			GITHUB_EVENT_PATH="$event_payload_file" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
+			FAKE_STRIX_CALL_LOG="$call_log" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "2" "$rc" "case=$case_name unsafe changed path exits closed"
+	assert_file_contains "$output_log" "pull request changed file path is unsafe" "case=$case_name unsafe path output"
+	assert_file_not_contains "$output_log" "No scannable changed files" "case=$case_name must not skip unsafe path"
+	local call_count="0"
+	if [ -f "$call_log" ]; then
+		call_count="$(wc -l <"$call_log" | tr -d ' ')"
+	fi
+	assert_equals "0" "$call_count" "case=$case_name unsafe changed path must not invoke Strix"
+
+	rm -rf "$tmp_dir"
+}
+
+assert_pid_not_running() {
+	local pid_file="$1"
+	local message="$2"
+
+	if [ ! -f "$pid_file" ]; then
+		record_failure "$message (missing pid file)"
+		return
+	fi
+
+	local pid
+	pid="$(tr -d '[:space:]' <"$pid_file")"
+	if [ -z "$pid" ]; then
+		record_failure "$message (empty pid)"
+		return
+	fi
+
+	if kill -0 "$pid" 2>/dev/null; then
+		record_failure "$message (pid $pid still running)"
+		kill "$pid" 2>/dev/null || true
+	fi
+}
+
+run_timeout_cleanup_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local workspace_dir="$tmp_dir/workspace"
+	local repo_root_dir="$workspace_dir/smart-crawling-server"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local fake_strix="$bin_dir/strix"
+	local child_pid_file="$tmp_dir/child.pid"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+sleep 30 &
+child_pid=$!
+printf '%s' "$child_pid" > "${FAKE_STRIX_CHILD_PID_FILE:?}"
+sleep 5
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'vertex_ai/timeout-cleanup-primary' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_CHILD_PID_FILE="$child_pid_file" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_PROCESS_TIMEOUT_SECONDS="1" \
+			STRIX_VERTEX_FALLBACK_MODELS="" \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			STRIX_TARGET_PATH="." \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "1" "$rc" "timeout cleanup exit code"
+	assert_file_contains "$output_log" "Strix run timed out after 1s." "timeout cleanup output"
+	local _
+	for _ in $(seq 1 12); do
+		if [ -f "$child_pid_file" ]; then
+			break
+		fi
+		sleep 0.25
+	done
+	for _ in $(seq 1 12); do
+		if [ -f "$child_pid_file" ]; then
+			local child_pid
+			child_pid="$(tr -d '[:space:]' <"$child_pid_file")"
+			if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+				sleep 0.5
+				continue
+			fi
+		fi
+		break
+	done
+	assert_pid_not_running "$child_pid_file" "timeout cleanup child process"
+
+	rm -rf "$tmp_dir"
+}
+
+run_total_timeout_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local workspace_dir="$tmp_dir/workspace"
+	local repo_root_dir="$workspace_dir/smart-crawling-server"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local call_count_file="$tmp_dir/calls.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
+sleep 5
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'vertex_ai/total-timeout-primary' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_CALL_COUNT_FILE="$call_count_file" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_PROCESS_TIMEOUT_SECONDS="10" \
+			STRIX_TOTAL_TIMEOUT_SECONDS="3" \
+			STRIX_VERTEX_FALLBACK_MODELS="vertex_ai/fallback-one" \
+			STRIX_TRANSIENT_RETRY_PER_MODEL="2" \
+			STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="0" \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			STRIX_TARGET_PATH="." \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "1" "$rc" "total timeout exit code"
+	assert_file_contains "$output_log" "Strix quick scan exceeded total timeout of 3s." "total timeout output"
+	local actual_calls="0"
+	if [ -f "$call_count_file" ]; then
+		actual_calls="$(wc -l <"$call_count_file" | tr -d ' ')"
+	fi
+	assert_equals "1" "$actual_calls" "total timeout should stop additional strix invocations"
+	if grep -Fq -- "Retrying model 'vertex_ai/total-timeout-primary'" "$output_log"; then
+		record_failure "total timeout should stop same-model retries"
+	fi
+	if grep -Fq -- "Primary Vertex model unavailable; retrying with fallback" "$output_log"; then
+		record_failure "total timeout should stop fallback retries"
+	fi
+	if grep -Fq -- "Configured Vertex model and fallback models were unavailable." "$output_log"; then
+		record_failure "total timeout should not be reported as model unavailability"
+	fi
+
+	rm -rf "$tmp_dir"
+}
+
+run_missing_config_case() {
+	local case_name="$1"
+	local strix_llm="$2"
+	local llm_api_key="$3"
+	local expected_message="$4"
+
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local output_log="$tmp_dir/output.log"
+	local call_count_file="$tmp_dir/strix_calls"
+	local fake_strix="$tmp_dir/strix"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "1" >> "${STRIX_CALL_COUNT_FILE:?}"
+exit 0
+EOF
+	chmod +x "$fake_strix"
+	if [ -n "$strix_llm" ]; then
+		printf '%s' "$strix_llm" >"$strix_llm_file"
+	fi
+	if [ -n "$llm_api_key" ]; then
+		printf '%s' "$llm_api_key" >"$llm_api_key_file"
+	fi
+
+	set +e
+	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+		PATH="$tmp_dir:$PATH" \
+		STRIX_DISABLE_PR_SCOPING="0" \
+		STRIX_LLM_FILE="$strix_llm_file" \
+		LLM_API_KEY_FILE="$llm_api_key_file" \
+		STRIX_CALL_COUNT_FILE="$call_count_file" \
+		bash "$GATE_SCRIPT" >"$output_log" 2>&1
+	local rc=$?
+	set -e
+
+	assert_equals "2" "$rc" "case=$case_name exit code"
+	assert_file_contains "$output_log" "$expected_message" "case=$case_name output"
+
+	local actual_calls="0"
+	if [ -f "$call_count_file" ]; then
+		actual_calls="$(wc -l <"$call_count_file" | tr -d ' ')"
+	fi
+	assert_equals "0" "$actual_calls" "case=$case_name strix call count"
+
+	rm -rf "$tmp_dir"
+}
+
+run_invalid_min_fail_severity_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local output_log="$tmp_dir/output.log"
+	local fake_strix="$tmp_dir/strix"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "unexpected strix execution" >&2
+exit 99
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'vertex_ai/ready-primary' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	set +e
+	env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+		PATH="$tmp_dir:$PATH" \
+		STRIX_DISABLE_PR_SCOPING="0" \
+		STRIX_LLM_FILE="$strix_llm_file" \
+		LLM_API_KEY_FILE="$llm_api_key_file" \
+		STRIX_FAIL_ON_MIN_SEVERITY="BOGUS" \
+		bash "$GATE_SCRIPT" >"$output_log" 2>&1
+	local rc=$?
+	set -e
+
+	assert_equals "2" "$rc" "case=invalid-min-fail-severity exit code"
+	assert_file_contains "$output_log" "STRIX_FAIL_ON_MIN_SEVERITY must be one of CRITICAL/HIGH/MEDIUM/LOW/INFO/INFORMATIONAL" "case=invalid-min-fail-severity output"
+	if grep -Fq -- "unexpected strix execution" "$output_log"; then
+		record_failure "case=invalid-min-fail-severity should not invoke strix"
+	fi
+	if [ "$rc" = "99" ]; then
+		record_failure "case=invalid-min-fail-severity should fail before fake strix exit code"
+	fi
+
+	rm -rf "$tmp_dir"
+}
+
+run_stale_report_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
+	local output_log="$tmp_dir/output.log"
+	local fake_strix="$tmp_dir/strix"
+	local stale_report_dir="$repo_root_dir/strix_runs/stale/vulnerabilities"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
+
+	mkdir -p "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	mkdir -p "$stale_report_dir"
+	cat >"$stale_report_dir/vuln-0001.md" <<'EOF'
+Severity: LOW
+EOF
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "Error: transport timeout"
+exit 1
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$tmp_dir:$PATH" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			LLM_API_BASE_FILE="$llm_api_base_file" \
+			STRIX_REPORTS_DIR="strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "1" "$rc" "case=stale-report-does-not-bypass exit code"
+	assert_file_contains "$output_log" "Strix quick scan failed with a non-recoverable error." "case=stale-report-does-not-bypass output"
+
+	rm -rf "$tmp_dir"
+}
+
+run_symlink_report_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
+	local output_log="$tmp_dir/output.log"
+	local fake_strix="$tmp_dir/strix"
+	local external_report_dir="$tmp_dir/external/vulnerabilities"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
+
+	mkdir -p "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	mkdir -p "$external_report_dir" "$repo_root_dir/strix_runs"
+	cat >"$external_report_dir/vuln-0001.md" <<'EOF'
+Severity: LOW
+EOF
+	ln -s "$tmp_dir/external" "$repo_root_dir/strix_runs/latest"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "Error: transport timeout"
+exit 1
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$tmp_dir:$PATH" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			LLM_API_BASE_FILE="$llm_api_base_file" \
+			STRIX_REPORTS_DIR="strix_runs" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "1" "$rc" "case=symlink-report-does-not-bypass exit code"
+	assert_file_contains "$output_log" "Strix quick scan failed with a non-recoverable error." "case=symlink-report-does-not-bypass output"
+
+	rm -rf "$tmp_dir"
+}
+
+run_unsafe_target_path_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
+	local output_log="$tmp_dir/output.log"
+	local fake_strix="$tmp_dir/strix"
+	local call_log="$tmp_dir/calls.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
+
+	mkdir -p "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' called >>"${FAKE_STRIX_CALL_LOG:?}"
+exit 0
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$tmp_dir:$PATH" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_CALL_LOG="$call_log" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			LLM_API_BASE_FILE="$llm_api_base_file" \
+			STRIX_TARGET_PATH="../../../../../etc/passwd" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "2" "$rc" "case=unsafe-target-path exit code"
+	assert_file_contains "$output_log" "contains unsupported path syntax" "case=unsafe-target-path output"
+	if [ -f "$call_log" ]; then
+		record_failure "case=unsafe-target-path should reject before invoking strix"
+	fi
+
+	rm -rf "$tmp_dir"
+}
+
+run_absolute_outside_target_path_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
+	mkdir -p "$bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local fake_strix="$bin_dir/strix"
+	local call_log="$tmp_dir/calls.log"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/bin/bash
+printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
+exit 0
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			FAKE_STRIX_CALL_LOG="$call_log" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			LLM_API_BASE_FILE="$llm_api_base_file" \
+			STRIX_TARGET_PATH="$tmp_dir/strix-pr-scope.attacker" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "2" "$rc" "case=absolute-outside-target-path exit code"
+	assert_file_contains "$output_log" "contains unsupported path syntax" "case=absolute-outside-target-path output"
+	if [ -f "$call_log" ]; then
+		record_failure "case=absolute-outside-target-path should reject before invoking strix"
+	fi
+
+	rm -rf "$tmp_dir"
+}
+
+assert_strix_workflow_pr_trigger_hardened
+
+assert_strix_gate_target_scope_separated
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-modified-file-uses-head-blob" \
+	"src/app.py" \
+	"BASE_CONTENT_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_CONTENT_SHOULD_BE_SCANNED"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-added-file-uses-head-blob" \
+	"src/new_module.py" \
+	"__ABSENT__" \
+	"HEAD_ONLY_NEW_FILE_SHOULD_BE_SCANNED"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-source-file-with-space-uses-head-blob" \
+	"src/unsafe name.py" \
+	"BASE_CONTENT_WITH_SPACE_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_CONTENT_WITH_SPACE_SHOULD_BE_SCANNED"
+
+run_pull_request_target_rejects_unsafe_changed_path_case \
+	"pull-request-target-parent-directory-changed-path-fails-closed" \
+	"../outside.py"
+
+run_pull_request_target_rejects_unsafe_changed_path_case \
+	"pull-request-target-pathspec-changed-path-fails-closed" \
+	":(glob)src/**"
+
+run_pull_request_target_rejects_unsafe_changed_path_case \
+	"pull-request-target-trailing-space-changed-path-fails-closed" \
+	"src/evil.py "
+
+run_pull_request_target_rejects_unsafe_changed_path_case \
+	"pull-request-target-leading-space-changed-path-fails-closed" \
+	" src/evil.py"
+
+run_pull_request_target_head_scope_case \
+	"pull-request-target-disabled-pr-scoping-nested-file-uses-head-blob" \
+	"backend/app/existing.py" \
+	"BASE_NESTED_CONTENT_SHOULD_NOT_BE_SCANNED" \
+	"HEAD_NESTED_CONTENT_SHOULD_BE_SCANNED" \
+	"1"
+
+run_pull_request_target_trusted_context_scope_case
+
+run_pull_request_target_aborts_on_pr_head_blob_failure_case \
+	"pull-request-target-added-file-pr-head-blob-read-failure" \
+	"src/new_module.py" \
+	"__ABSENT__" \
+	"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
+	"show"
+
+run_pull_request_target_aborts_on_pr_head_blob_failure_case \
+	"pull-request-target-modified-file-pr-head-blob-read-failure" \
+	"src/existing.py" \
+	"BASE_CONTENT_MUST_NOT_BE_USED_AFTER_HEAD_READ_FAILURE" \
+	"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
+	"show"
+
+run_pull_request_target_irregular_head_entry_fails_closed_case \
+	"pull-request-target-symlink-head-entry-fails-closed" \
+	"src/app.py"
+
+run_pull_request_target_irregular_head_entry_fails_closed_case \
+	"pull-request-target-symlink-readme-head-entry-fails-closed" \
+	"README.md"
+
+run_pull_request_target_irregular_head_entry_fails_closed_case \
+	"pull-request-target-symlink-test-head-entry-fails-closed" \
+	"tests/app_test.py"
+
+run_pull_request_target_irregular_head_entry_fails_closed_case \
+	"pull-request-target-symlink-infra-head-entry-fails-closed" \
+	"infra/deploy.sh"
+
+run_pull_request_target_aborts_on_pr_head_blob_failure_case \
+	"pull-request-target-modified-file-pr-head-tree-lookup-failure" \
+	"src/existing.py" \
+	"BASE_CONTENT_MUST_NOT_BE_USED_AFTER_HEAD_LOOKUP_FAILURE" \
+	"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
+	"ls-tree"
+
+run_pull_request_target_aborts_on_pr_head_blob_failure_case \
+	"pull-request-target-changed-file-list-diff-failure" \
+	"src/existing.py" \
+	"BASE_CONTENT_MUST_NOT_BE_USED_AFTER_DIFF_FAILURE" \
+	"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
+	"diff"
+
+run_pull_request_target_aborts_on_pr_head_blob_failure_case \
+	"pull-request-target-disabled-pr-scope-pr-head-blob-read-failure" \
+	"src/existing.py" \
+	"BASE_CONTENT_MUST_NOT_BE_USED_AFTER_DISABLED_SCOPE_HEAD_FAILURE" \
+	"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
+	"show" \
+	"1"
+
+run_gate_case "success" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "runtime-env-forwarding" \
+	"gemini/gemini-pro-3.1-preview" \
+	"" \
+	"0" \
+	"scan ok" \
+	"1" \
+	"gemini/gemini-pro-3.1-preview" \
+	"<unset>" \
+	"gemini" \
+	""
+
+run_gate_case "vertex-primary-notfound-fallback-success" \
+	"vertex_ai/missing-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "vertex-all-notfound" \
+	"vertex_ai/missing-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Configured Vertex model and fallback models were unavailable." \
+	"3" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one|vertex_ai/fallback-two" \
+	"<unset>|<unset>|<unset>"
+
+run_gate_case "nonrecoverable" \
+	"openai/gpt-4o-mini" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid"
+
+run_gate_case "provider-prefix-required" \
+	"gemini-2.5-pro" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/gemini-2.5-pro'." \
+	"1" \
+	"vertex_ai/gemini-2.5-pro" \
+	"<unset>"
+
+run_gate_case "provider-prefix-fallback-normalization" \
+	"missing-primary" \
+	"fallback-one fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "provider-prefix-required-resource-path-primary-implicit-default-provider" \
+	"projects/p1/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/gemini-2.5-pro'." \
+	"1" \
+	"vertex_ai/gemini-2.5-pro" \
+	"<unset>"
+
+run_gate_case "provider-prefix-required-resource-path-primary-explicit-empty-default-provider" \
+	"projects/p1/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/gemini-2.5-pro'." \
+	"1" \
+	"vertex_ai/gemini-2.5-pro" \
+	"<unset>" \
+	""
+
+run_gate_case "provider-prefix-resource-path-primary-notfound-fallback-success" \
+	"projects/p1/locations/us-central1/publishers/google/models/missing-primary" \
+	"projects/p1/locations/us-central1/publishers/google/models/fallback-one projects/p1/locations/us-central1/publishers/google/models/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+# Regression: Vertex custom model resource path projects/<p>/locations/<l>/models/<id>
+# (no publishers/ segment) must be recognized as a Vertex resource path and
+# normalized to vertex_ai/<model_id>.
+run_gate_case "vertex-custom-model-resource-path" \
+	"projects/my-proj/locations/us-central1/models/my-custom-model-123" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Normalized STRIX_LLM to provider-qualified model 'vertex_ai/my-custom-model-123'." \
+	"1" \
+	"vertex_ai/my-custom-model-123" \
+	"<unset>"
+
+run_gate_case "vertex-notfound-without-status-fallback-success" \
+	"vertex_ai/missing-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "vertex-notfound-compact-status-fallback-success" \
+	"vertex_ai/missing-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "nonvertex-slash-model-passthrough" \
+	"foo/bar" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"scan ok with non-vertex slash model passthrough" \
+	"1" \
+	"foo/bar" \
+	"https://example.invalid"
+
+run_gate_case "primary-duplicate-in-fallback" \
+	"missing-primary" \
+	"vertex_ai/missing-primary fallback-one" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "multiline-fallback-success" \
+	"vertex_ai/missing-primary" \
+	$'vertex_ai/fallback-one\nvertex_ai/fallback-two' \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-two'." \
+	"3" \
+	"vertex_ai/missing-primary|vertex_ai/fallback-one|vertex_ai/fallback-two" \
+	"<unset>|<unset>|<unset>"
+
+run_gate_case "vertex-primary-ratelimit-fallback-success" \
+	"vertex_ai/ratelimit-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/ratelimit-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "vertex-primary-resource-exhausted-fallback-success" \
+	"vertex_ai/resource-exhausted-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/resource-exhausted-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "vertex-primary-429-fallback-success" \
+	"vertex_ai/http429-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/http429-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "vertex-primary-midstream-fallback-success" \
+	"vertex_ai/midstream-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/midstream-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "vertex-primary-midstream-retry-same-model-success" \
+	"vertex_ai/retry-midstream-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after same-model retry" \
+	"2" \
+	"vertex_ai/retry-midstream-primary|vertex_ai/retry-midstream-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Bug 9: Rate-limit transient same-model retry (previously untested path)
+run_gate_case "vertex-primary-ratelimit-retry-same-model-success" \
+	"vertex_ai/retry-ratelimit-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after same-model rate-limit retry" \
+	"2" \
+	"vertex_ai/retry-ratelimit-primary|vertex_ai/retry-ratelimit-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "vertex-primary-api-connection-retry-same-model-success" \
+	"gemini/retry-api-connection-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after same-model api connection retry" \
+	"2" \
+	"gemini/retry-api-connection-primary|gemini/retry-api-connection-primary" \
+	"https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "gemini-high-demand-retry-same-model-success" \
+	"gemini/retry-high-demand-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after same-model high-demand retry" \
+	"2" \
+	"gemini/retry-high-demand-primary|gemini/retry-high-demand-primary" \
+	"https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "gemini-timeout-retry-same-model-success" \
+	"gemini/retry-timeout-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after same-model timeout retry" \
+	"2" \
+	"gemini/retry-timeout-primary|gemini/retry-timeout-primary" \
+	"https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "gemini-timeout-fallback-success" \
+	"gemini/timeout-fallback-primary" \
+	"gemini/fallback-one gemini/fallback-two" \
+	"0" \
+	"scan ok after gemini fallback" \
+	"3" \
+	"gemini/timeout-fallback-primary|gemini/timeout-fallback-primary|gemini/fallback-one" \
+	"https://example.invalid|https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "gemini-generic-fallback-success" \
+	"gemini/timeout-fallback-primary" \
+	"" \
+	"0" \
+	"scan ok after gemini fallback" \
+	"3" \
+	"gemini/timeout-fallback-primary|gemini/timeout-fallback-primary|gemini/fallback-one" \
+	"https://example.invalid|https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"" \
+	"" \
+	"__UNSET__" \
+	"gemini/fallback-one gemini/fallback-two"
+
+run_gate_case "gemini-zero-findings-timeout-fallback-fails" \
+	"gemini/zero-timeout-primary" \
+	"gemini/fallback-one" \
+	"1" \
+	"Configured model and fallback models were unavailable." \
+	"2" \
+	"gemini/zero-timeout-primary|gemini/fallback-one" \
+	"https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "service-unavailable-no-llm-marker-nonrecoverable" \
+	"custom/service-unavailable-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"custom/service-unavailable-primary" \
+	"https://example.invalid" \
+	"custom" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "server-disconnect-no-llm-marker-nonrecoverable" \
+	"vertex_ai/app-server-disconnect-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"vertex_ai/app-server-disconnect-primary" \
+	"<unset>"
+
+# Bug 11: Timeout should move directly to fallback instead of retrying the same model.
+run_gate_case "vertex-primary-timeout-retry-same-model-success" \
+	"vertex_ai/retry-timeout-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after timeout fallback" \
+	"2" \
+	"vertex_ai/retry-timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Bug 11b: Timeout → immediate fallback model succeeds.
+run_gate_case "vertex-primary-timeout-exhausted-fallback-success" \
+	"vertex_ai/timeout-exhaust-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after timeout-exhausted fallback" \
+	"2" \
+	"vertex_ai/timeout-exhaust-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_gate_case "zero-findings-timeout-all-models" \
+	"vertex_ai/zero-timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"allowing pull request continuation" \
+	"2" \
+	"vertex_ai/zero-timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "zero-findings-timeout-all-models" \
+	"vertex_ai/zero-timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Configured Vertex model and fallback models were unavailable." \
+	"2" \
+	"vertex_ai/zero-timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1" \
+	"0" \
+	"push"
+
+run_gate_case "zero-findings-sticky-across-fallback" \
+	"vertex_ai/zero-sticky-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"allowing pull request continuation" \
+	"2" \
+	"vertex_ai/zero-sticky-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "zero-findings-with-low-report-timeout" \
+	"vertex_ai/zero-low-primary" \
+	"vertex_ai/fallback-one" \
+	"1" \
+	"Configured Vertex model and fallback models were unavailable." \
+	"2" \
+	"vertex_ai/zero-low-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "vertex-all-ratelimited" \
+	"vertex_ai/ratelimit-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Configured Vertex model and fallback models were unavailable." \
+	"3" \
+	"vertex_ai/ratelimit-primary|vertex_ai/fallback-one|vertex_ai/fallback-two" \
+	"<unset>|<unset>|<unset>"
+
+run_gate_case "vertex-primary-hallucinated-endpoint-fallback-success" \
+	"vertex_ai/hallucination-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/hallucination-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+run_gate_case "vertex-primary-existing-endpoint-nonrecoverable" \
+	"vertex_ai/existing-endpoint-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"vertex_ai/existing-endpoint-primary" \
+	"<unset>"
+
+run_gate_case "high-vuln-below-threshold" \
+	"vertex_ai/high-vuln-primary" \
+	"" \
+	"0" \
+	"below configured fail threshold 'CRITICAL'" \
+	"1" \
+	"vertex_ai/high-vuln-primary" \
+	"<unset>"
+
+run_gate_case "inline-medium-below-threshold" \
+	"vertex_ai/inline-medium-primary" \
+	"" \
+	"0" \
+	"below configured fail threshold 'CRITICAL'" \
+	"1" \
+	"vertex_ai/inline-medium-primary" \
+	"<unset>"
+
+run_gate_case "medium-vuln-default-threshold" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"__UNSET__"
+
+# Infrastructure error guard: below-threshold findings must NOT pass when the
+# strix log contains evidence of infrastructure-level errors (timeout,
+# rate-limit, transport failures) because the scan was likely incomplete.
+
+# Guard test 1: LOW finding + timeout → should fail (exit 1).
+# The below-threshold check runs first but detects infrastructure errors in the
+# strix log and refuses bypass.  The timeout is also vertex-retryable, so the
+# gate continues into the fallback loop.  All attempts see the same timeout.
+run_gate_case "below-threshold-with-timeout" \
+	"vertex_ai/low-timeout-primary" \
+	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
+	"1" \
+	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"3" \
+	"vertex_ai/low-timeout-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+	"<unset>|<unset>|<unset>"
+
+# Guard test 2: LOW finding + rate-limit → should fail (exit 1).
+# Below-threshold check refuses bypass due to infra errors.
+# Rate-limit is vertex-retryable, so the gate also tries fallback models.
+run_gate_case "below-threshold-with-ratelimit" \
+	"vertex_ai/low-ratelimit-primary" \
+	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
+	"1" \
+	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"3" \
+	"vertex_ai/low-ratelimit-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+	"<unset>|<unset>|<unset>"
+
+# Guard test 3: INFO finding + ConnectionError → should fail (exit 1).
+# ConnectionError is NOT vertex-retryable, so only the primary model is tried.
+run_gate_case "below-threshold-with-connection-error" \
+	"vertex_ai/info-conn-primary" \
+	"" \
+	"1" \
+	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"1" \
+	"vertex_ai/info-conn-primary" \
+	"<unset>"
+
+# Guard test 3b: INFO finding + ConnectionError WITHOUT provider marker → should
+# PASS (exit 0).  The two-grep infra-error detector requires both a transport
+# error class AND an LLM_PROVIDER_ONLY_REGEX marker (litellm, openai,
+# anthropic, VertexAI, etc.).  Note: transport libraries (requests, httpx,
+# httpcore) are intentionally excluded from LLM_PROVIDER_ONLY_REGEX to avoid
+# false positives — see guard test 3c below.
+# A bare "ConnectionError" from the target application lacks the marker, so
+# has_detected_infrastructure_error() returns 1 (no infra error) and the
+# below-threshold bypass succeeds.
+run_gate_case "below-threshold-with-connection-error-no-provider" \
+	"vertex_ai/info-conn-noprov-primary" \
+	"" \
+	"0" \
+	"below configured fail threshold" \
+	"1" \
+	"vertex_ai/info-conn-noprov-primary" \
+	"<unset>"
+
+# Guard test 3c: INFO finding + requests.exceptions.ConnectionError → should
+# PASS (exit 0).  The "requests" transport library matches the broad
+# PROVIDER_CONTEXT_REGEX but is intentionally excluded from LLM_PROVIDER_ONLY_REGEX.
+# Before commit 0e90d48 the connection-error path used PROVIDER_CONTEXT_REGEX
+# and would have mis-classified this as an LLM infrastructure error; now it
+# correctly uses LLM_PROVIDER_ONLY_REGEX, so below-threshold bypass succeeds.
+run_gate_case "below-threshold-with-requests-connection-error" \
+	"vertex_ai/info-conn-requests-primary" \
+	"" \
+	"0" \
+	"below configured fail threshold" \
+	"1" \
+	"vertex_ai/info-conn-requests-primary" \
+	"<unset>"
+
+# Guard test 4: MEDIUM finding + MidStreamFallbackError → should fail (exit 1).
+# Midstream is vertex-retryable, so the gate also tries fallback models
+# (after the below-threshold check refuses bypass due to infra errors).
+run_gate_case "below-threshold-with-midstream" \
+	"vertex_ai/medium-midstream-primary" \
+	"vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash" \
+	"1" \
+	"infrastructure errors occurred during this pipeline run; refusing bypass" \
+	"3" \
+	"vertex_ai/medium-midstream-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+	"<unset>|<unset>|<unset>"
+
+run_gate_case "critical-vuln-at-threshold" \
+	"vertex_ai/critical-vuln-primary" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"vertex_ai/critical-vuln-primary" \
+	"<unset>"
+
+run_gate_case "malformed-severity-marker-nonrecoverable" \
+	"vertex_ai/malformed-severity-primary" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"vertex_ai/malformed-severity-primary" \
+	"<unset>"
+
+# Bug 7: Model disagreement — primary produces CRITICAL, fallback produces LOW.
+# The CRITICAL from the earlier report must NOT be ignored.
+# Both models produce NOT_FOUND errors, so the gate exhausts fallbacks and
+# reports "Configured Vertex model and fallback models were unavailable."
+# The key assertion is exit 1: the CRITICAL finding is NOT downgraded to pass.
+run_gate_case "model-disagreement-critical-in-earlier-report" \
+	"vertex_ai/model-a" \
+	"vertex_ai/model-b" \
+	"1" \
+	"Configured Vertex model and fallback models were unavailable." \
+	"2" \
+	"vertex_ai/model-a|vertex_ai/model-b" \
+	"<unset>|<unset>"
+
+# Bug 4: deepseek/models/deepseek-r1 must NOT be rewritten to vertex_ai/deepseek-r1
+run_gate_case "nonvertex-slash-model-not-rewritten" \
+	"deepseek/models/deepseek-r1" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"scan ok with deepseek model passthrough" \
+	"1" \
+	"deepseek/models/deepseek-r1" \
+	"https://example.invalid"
+
+# Regression: STRIX_TARGET_PATH=<dir>/src with default STRIX_SOURCE_DIRS (now ".")
+# must resolve to <dir>/src/. (i.e. <dir>/src itself), NOT <dir>/src/src.
+# The hallucinated-endpoint scenario writes a vuln report with a fake endpoint;
+# the gate should detect it's absent from source and trigger fallback — which
+# requires the source dir to actually exist and be scanned.
+run_gate_case "target-path-src-default-source-dirs" \
+	"vertex_ai/hallucination-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/hallucination-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1" \
+	"CRITICAL" \
+	"0" \
+	"__USE_SUBDIR_SRC__" \
+	""
+
+# Bug 2 follow-up: multi-entry STRIX_SOURCE_DIRS test.
+# Endpoint /api/status lives in api/ (not src/).  With STRIX_SOURCE_DIRS="src api"
+# the gate must find the endpoint in the api/ dir and treat the finding as
+# non-hallucinated → non-recoverable failure (exit 1).
+run_gate_case "multi-source-dirs-existing-endpoint" \
+	"vertex_ai/multi-dir-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"vertex_ai/multi-dir-primary" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"src api"
+
+run_gate_case "preserve-existing-api-base" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with preserved api base" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://preexisting.invalid" \
+	"vertex_ai" \
+	"" \
+	"https://preexisting.invalid"
+
+run_gate_case "default-fallback-order-fast-first" \
+	"vertex_ai/missing-primary" \
+	"" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/gemini-2.5-pro'." \
+	"2" \
+	"vertex_ai/missing-primary|vertex_ai/gemini-2.5-pro" \
+	"<unset>|<unset>"
+
+# Bug 13: All fallback models are the same as the primary model.
+# The gate should detect that no distinct fallback was tried and emit an ERROR.
+run_gate_case "all-fallbacks-same-as-primary" \
+	"vertex_ai/same-primary" \
+	"vertex_ai/same-primary vertex_ai/same-primary" \
+	"1" \
+	"ERROR: All configured fallback models are the same as the primary model" \
+	"1" \
+	"vertex_ai/same-primary" \
+	"<unset>"
+
+# Bug 14: Timeout should fall back rather than emit a same-model retry message.
+run_gate_case "vertex-primary-timeout-retry-reason-message" \
+	"vertex_ai/retry-timeout-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Strix quick scan succeeded with fallback model 'vertex_ai/fallback-one'." \
+	"2" \
+	"vertex_ai/retry-timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"2"
+
+# Bug 14: Retry reason messages — rate-limit retry should say "due to rate limit".
+run_gate_case "vertex-primary-ratelimit-retry-reason-message" \
+	"vertex_ai/retry-ratelimit-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"Retrying model 'vertex_ai/retry-ratelimit-primary' due to rate limit" \
+	"2" \
+	"vertex_ai/retry-ratelimit-primary|vertex_ai/retry-ratelimit-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"2"
+
+# Bug 14: Timing message — success should log elapsed time.
+run_gate_case "vertex-primary-success-timing-message" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/ready-primary' in " \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# is_timeout_error() provider-context marker test:
+# Bare "Connection timed out" without any LLM provider marker should NOT
+# be treated as a timeout error. The gate should fail without retrying.
+# The fake strix now also emits "httpx", "httpcore", and "requests" strings
+# to verify that transport library names alone do NOT qualify as provider markers.
+# Model name deliberately avoids containing any provider marker string
+# (litellm, openai, anthropic, VertexAI, vertex.ai, google.cloud).
+run_gate_case "bare-timeout-no-provider-marker" \
+	"custom/bare-timeout-model" \
+	"" \
+	"1" \
+	"" \
+	"1" \
+	"custom/bare-timeout-model" \
+	"https://example.invalid" \
+	"custom" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# is_timeout_error() Tier 2: httpx.ReadTimeout + provider-context marker.
+# The timeout should be classified for fallback, not same-model retry.
+run_gate_case "httpx-read-timeout-with-provider-marker" \
+	"vertex_ai/httpx-timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"scan ok after httpx-timeout fallback" \
+	"2" \
+	"vertex_ai/httpx-timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Negative: httpx.ReadTimeout WITHOUT provider-context marker should NOT
+# be classified as a retryable timeout (the gate should treat it as a
+# non-recoverable scan failure).
+run_gate_case "httpx-read-timeout-no-provider-marker" \
+	"custom/httpx-timeout-no-ctx" \
+	"" \
+	"1" \
+	"non-recoverable error" \
+	"1" \
+	"custom/httpx-timeout-no-ctx" \
+	"https://example.invalid" \
+	"custom" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# is_timeout_error() Tier 2b: httpcore.ReadTimeout + provider-context marker.
+# Mirrors the httpx.ReadTimeout positive case above, but falls back immediately.
+run_gate_case "httpcore-read-timeout-with-provider-marker" \
+	"vertex_ai/httpcore-timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"scan ok after httpcore-timeout fallback" \
+	"2" \
+	"vertex_ai/httpcore-timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Negative: httpcore.ReadTimeout WITHOUT provider-context marker should NOT
+# be classified as a retryable timeout (the gate should treat it as a
+# non-recoverable scan failure).
+run_gate_case "httpcore-read-timeout-no-provider-marker" \
+	"custom/httpcore-timeout-no-ctx" \
+	"" \
+	"1" \
+	"non-recoverable error" \
+	"1" \
+	"custom/httpcore-timeout-no-ctx" \
+	"https://example.invalid" \
+	"custom" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# is_timeout_error() positive branch for "Connection timed out" + provider marker:
+# When "Connection timed out" appears alongside an LLM provider marker, the
+# gate should classify it as a timeout and move to fallback.
+run_gate_case "bare-timeout-with-provider-marker" \
+	"vertex_ai/bare-timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"scan ok after bare-timeout fallback" \
+	"2" \
+	"vertex_ai/bare-timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Bare "Connection timed out" + provider marker: primary fails once,
+# then gate falls back to fallback-one which succeeds.
+run_gate_case "bare-timeout-provider-marker-exhausted-fallback" \
+	"vertex_ai/bare-timeout-exhaust-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"scan ok after bare-timeout-exhaust fallback" \
+	"2" \
+	"vertex_ai/bare-timeout-exhaust-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Sticky INFRA_ERROR_DETECTED flag: first call hits rate-limit (infra error),
+# second call fails with a non-retryable error but leaves a partial LOW report.
+# The gate must refuse the below-threshold bypass because an infrastructure
+# error was detected during this pipeline run.
+run_gate_case "infra-error-sticky-flag" \
+	"vertex_ai/sticky-flag-primary" \
+	"" \
+	"1" \
+	"infrastructure errors occurred" \
+	"3" \
+	"vertex_ai/sticky-flag-primary|vertex_ai/sticky-flag-primary|vertex_ai/gemini-2.5-pro" \
+	"<unset>|<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+run_invalid_min_fail_severity_case
+run_stale_report_case
+run_symlink_report_case
+run_unsafe_target_path_case
+run_absolute_outside_target_path_case
+
+run_gate_case "slow-timeout" \
+	"vertex_ai/slow-primary" \
+	"" \
+	"1" \
+	"Strix run timed out after 1s." \
+	"3" \
+	"vertex_ai/slow-primary|vertex_ai/gemini-2.5-pro|vertex_ai/gemini-2.5-flash" \
+	"<unset>|<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "timeout-disabled-success" \
+	"vertex_ai/timeout-disabled-primary" \
+	"" \
+	"0" \
+	"scan ok with timeout disabled" \
+	"1" \
+	"vertex_ai/timeout-disabled-primary" \
+	"<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"0"
+
+run_timeout_cleanup_case
+
+run_total_timeout_case
+
+run_gate_case "pr-changed-scope-bounded" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with bounded changed-file scope" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "pr-python-scope-context" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with python dependency scope" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"backend/api/emails.py"
+
+run_gate_case "pr-changed-scope-batched" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Scoped pull request Strix scan to 3 changed file(s)." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	$'sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java\nsync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java\nsync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java'
+
+run_gate_case "pr-changed-scope-max-batches" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Running pull request Strix batch 2/2." \
+	"2" \
+	"openai/gpt-4o-mini|openai/gpt-4o-mini" \
+	"https://example.invalid|https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	$'sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java\nsync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java\nsync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java\nsync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java' \
+	"" \
+	"2"
+
+run_gate_case "pr-changed-scope-includes-ci-dependency" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with CI support dependency" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"scripts/ci/strix_quick_gate.sh"
+
+run_gate_case "pr-changed-scope-rebalanced" \
+	"vertex_ai/gemini-2.5-flash" \
+	"vertex_ai/gemini-2.5-pro" \
+	"0" \
+	"Rebalancing pull request Strix batch 1/1 into smaller batches after timeout." \
+	"3" \
+	"vertex_ai/gemini-2.5-flash|vertex_ai/gemini-2.5-flash|vertex_ai/gemini-2.5-flash" \
+	"<unset>|<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"3000" \
+	"pull_request" \
+	$'sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java\nsync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java\nsync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java\nsync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java' \
+	"" \
+	"4"
+
+run_gate_case "pr-empty-diff-skip" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"No scannable changed files in pull request; skipping Strix quick scan." \
+	"0" \
+	"" \
+	"" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"__SET_EMPTY__"
+
+run_gate_case "pr-baseline-critical-unchanged" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "pr-baseline-critical-absolute-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "pr-baseline-critical-subdir-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-baseline-critical-subdir-boxed-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-baseline-critical-subdir-endpoint" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-baseline-critical-subdir-endpoint-bare-filename" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-baseline-critical-subdir-narrative-backticked-file" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-critical-relative-path-escape-subdir-narrative-backticked-file" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-critical-changed" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix finding intersects files changed in this pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "pr-critical-changed-absolute-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix finding intersects files changed in this pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java"
+
+run_gate_case "pr-critical-changed-subdir-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix finding intersects files changed in this pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-critical-changed-subdir-endpoint" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix finding intersects files changed in this pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-critical-path-escape-subdir-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-server/src/main/resources/flyway/V24__update_search_expression_team_keyword_id.sql" \
+	"" \
+	"" \
+	"1"
+
+run_gate_case "pr-critical-unmapped" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+run_gate_case "pr-critical-unmapped-narrative-target" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java"
+
+run_gate_case "pr-critical-unmapped-other-workspace-repo" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Unable to map Strix findings to changed files; failing closed for pull request." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java"
+
+run_gate_case "pr-critical-manifest-only-pom" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix changed-manifest finding requires verified authoritative SCA checks on this PR head; failing closed." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml"
+
+run_gate_case "pr-critical-manifest-only-pom-test-override" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix changed-manifest finding is covered by verified authoritative SCA checks on this PR head; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml" \
+	"" \
+	"" \
+	"0" \
+	"passed"
+
+run_gate_case "pr-critical-manifest-only-pom-same-head-different-pr" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix changed-manifest finding requires verified authoritative SCA checks on this PR head; failing closed." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"123" \
+	'{"workflow_runs":[{"id":201,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":456}]},{"id":202,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":456}]}]}'
+
+run_gate_case "pr-critical-manifest-only-pom-current-pr-authoritative" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"Strix changed-manifest finding is covered by verified authoritative SCA checks on this PR head; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"123" \
+	'{"workflow_runs":[{"id":301,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]},{"id":302,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]}]}'
+
+run_gate_case "pr-critical-manifest-only-pom-after-fallback-authoritative" \
+	"vertex_ai/timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Strix changed-manifest finding is covered by verified authoritative SCA checks on this PR head; allowing pipeline continuation." \
+	"2" \
+	"vertex_ai/timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"123" \
+	'{"workflow_runs":[{"id":401,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]},{"id":402,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]}]}'
+
+run_gate_case "pr-critical-manifest-only-pom-console-only-after-fallback-authoritative" \
+	"vertex_ai/timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Strix changed-manifest finding is covered by verified authoritative SCA checks on this PR head; allowing pipeline continuation." \
+	"2" \
+	"vertex_ai/timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"123" \
+	'{"workflow_runs":[{"id":403,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]},{"id":404,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]}]}'
+
+run_gate_case "pr-critical-manifest-only-pom-console-target-only-after-fallback-authoritative" \
+	"vertex_ai/timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Strix changed-manifest finding is covered by verified authoritative SCA checks on this PR head; allowing pipeline continuation." \
+	"2" \
+	"vertex_ai/timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"123" \
+	'{"workflow_runs":[{"id":405,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]},{"id":406,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]}]}'
+
+run_gate_case "pr-low-markdown-plus-console-critical-manifest-after-fallback-authoritative" \
+	"vertex_ai/timeout-primary" \
+	"vertex_ai/fallback-one" \
+	"0" \
+	"Strix changed-manifest finding is covered by verified authoritative SCA checks on this PR head; allowing pipeline continuation." \
+	"2" \
+	"vertex_ai/timeout-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"pom.xml" \
+	"" \
+	"" \
+	"0" \
+	"" \
+	"123" \
+	'{"workflow_runs":[{"id":405,"name":"Dependency review","path":".github/workflows/dependency-review.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]},{"id":406,"name":"OSV-Scanner","path":".github/workflows/osvscanner.yml","head_sha":"test-head-sha","status":"completed","conclusion":"success","pull_requests":[{"number":123}]}]}'
+
+run_missing_config_case "missing-strix-llm" "" "dummy" "ERROR: STRIX_LLM_FILE must reference a regular file containing the model."
+run_missing_config_case "missing-llm-api-key" "vertex_ai/ready-primary" "" "ERROR: LLM_API_KEY_FILE must reference a regular file containing the API key."
+run_missing_config_case "whitespace-only-strix-llm" "   " "dummy" "ERROR: STRIX_LLM_FILE must contain a non-empty model value."
+run_missing_config_case "whitespace-only-llm-api-key" "vertex_ai/ready-primary" $'\t  ' "ERROR: LLM_API_KEY_FILE must contain a non-empty API key."
+
+# ── Segment boundary enforcement for is_vertex_resource_path / extract_vertex_model_id ──
+# Shell glob '*' matches '/' so the old case-pattern implementation accepted
+# malformed paths with extra segments (e.g. "projects/a/b/locations/…").
+# These tests verify that only paths with the exact expected segment count match.
+#
+# The gate script cannot be sourced directly (it has top-level side effects),
+# so the shared helper script exposes the pure model/path functions directly.
+# shellcheck source=scripts/ci/strix_model_utils.sh
+# shellcheck disable=SC1091  # source path is repo-local; local lint may omit -x
+. "$REPO_ROOT/scripts/ci/strix_model_utils.sh"
+
+assert_vertex_path() {
+	local label="$1" path="$2" expect_rc="$3"
+	local actual_rc
+	if is_vertex_resource_path "$path"; then
+		actual_rc=0
+	else
+		actual_rc=1
+	fi
+	if [ "$actual_rc" -ne "$expect_rc" ]; then
+		echo "FAIL: is_vertex_resource_path($label): got rc=$actual_rc want $expect_rc" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
+}
+
+assert_vertex_extract() {
+	local label="$1" path="$2" expected="$3"
+	local actual rc
+	set +e
+	actual="$(extract_vertex_model_id "$path")"
+	rc=$?
+	set -e
+	if [ "$rc" -ne 0 ]; then
+		record_failure "extract_vertex_model_id($label) rc=$rc path='$path'"
+		return
+	fi
+	if [ "$actual" != "$expected" ]; then
+		echo "FAIL: extract_vertex_model_id($label): got '$actual' want '$expected'" >&2
+		FAILURES=$((FAILURES + 1))
+	fi
+}
+
+assert_normalized_model() {
+	local label="$1" model="$2" default_provider="$3" expected="$4"
+	local actual rc old_default_provider="${DEFAULT_PROVIDER-__UNSET__}"
+	if [ "$old_default_provider" = "__UNSET__" ]; then
+		unset DEFAULT_PROVIDER
+	else
+		DEFAULT_PROVIDER="$old_default_provider"
+	fi
+
+	DEFAULT_PROVIDER="$default_provider"
+	set +e
+	actual="$(normalize_model "$model")"
+	rc=$?
+	set -e
+
+	if [ "$old_default_provider" = "__UNSET__" ]; then
+		unset DEFAULT_PROVIDER
+	else
+		DEFAULT_PROVIDER="$old_default_provider"
+	fi
+
+	if [ "$rc" -ne 0 ]; then
+		record_failure "normalize_model($label) rc=$rc model='$model'"
+		return
+	fi
+	if [ "$actual" != "$expected" ]; then
+		record_failure "normalize_model($label): got '$actual' want '$expected'"
+	fi
+}
+
+assert_model_requires_vertex_auth() {
+	local label="$1" model="$2" default_provider="$3" expected_rc="$4"
+	local rc old_default_provider="${DEFAULT_PROVIDER-__UNSET__}"
+	if [ "$old_default_provider" = "__UNSET__" ]; then
+		unset DEFAULT_PROVIDER
+	else
+		DEFAULT_PROVIDER="$old_default_provider"
+	fi
+
+	DEFAULT_PROVIDER="$default_provider"
+	set +e
+	model_requires_vertex_auth "$model"
+	rc=$?
+	set -e
+
+	if [ "$old_default_provider" = "__UNSET__" ]; then
+		unset DEFAULT_PROVIDER
+	else
+		DEFAULT_PROVIDER="$old_default_provider"
+	fi
+
+	assert_equals "$expected_rc" "$rc" "model_requires_vertex_auth($label)"
+}
+
+# Valid paths — should return 0
+assert_vertex_path "models/<id>" "models/gemini-2.5-pro" 0
+assert_vertex_path "publishers/<p>/models/<id>" "publishers/google/models/gemini-2.5-pro" 0
+assert_vertex_path "projects/<p>/locations/<l>/models/<id>" "projects/my-proj/locations/us-central1/models/gemini-2.5-pro" 0
+assert_vertex_path "projects/<p>/locations/<l>/publishers/<pub>/models/<id>" "projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-pro" 0
+
+# Malformed paths — extra segments that '*' used to match across '/'
+assert_vertex_path "extra-segment-in-project" "projects/a/b/locations/us/models/foo" 1
+assert_vertex_path "extra-segment-in-location" "projects/a/locations/b/c/models/foo" 1
+assert_vertex_path "extra-segment-in-publisher" "projects/a/locations/b/publishers/c/d/models/foo" 1
+assert_vertex_path "extra-segment-after-models" "projects/a/locations/b/models/foo/bar" 1
+assert_vertex_path "empty-model-id" "models/" 1
+assert_vertex_path "empty-project" "projects//locations/us/models/foo" 1
+assert_vertex_path "plain-model-name" "gemini-2.5-pro" 1
+assert_vertex_path "non-vertex-provider-slash" "deepseek/models/deepseek-r1" 1
+assert_vertex_path "empty-string" "" 1
+
+# extract_vertex_model_id — valid paths
+assert_vertex_extract "models/<id>" "models/gemini-2.5-pro" "gemini-2.5-pro"
+assert_vertex_extract "publishers/<p>/models/<id>" "publishers/google/models/gemini-2.5-pro" "gemini-2.5-pro"
+assert_vertex_extract "projects/<p>/locations/<l>/models/<id>" "projects/my-proj/locations/us-central1/models/gemini-2.5-pro" "gemini-2.5-pro"
+assert_vertex_extract "projects/…/publishers/…/models/<id>" "projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-pro" "gemini-2.5-pro"
+
+# extract_vertex_model_id — non-vertex paths return as-is
+assert_vertex_extract "non-vertex-passthrough" "deepseek/models/deepseek-r1" "deepseek/models/deepseek-r1"
+assert_vertex_extract "plain-model-passthrough" "gemini-2.5-pro" "gemini-2.5-pro"
+
+# Explicit Vertex resource paths must remain Vertex models even when the default
+# provider points at a non-Vertex provider.
+assert_normalized_model \
+	"vertex-resource-ignores-nonvertex-default-provider" \
+	"projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-pro" \
+	"anthropic" \
+	"vertex_ai/gemini-2.5-pro"
+
+assert_model_requires_vertex_auth "explicit-vertex" "vertex_ai/gemini-2.5-pro" "gemini" "0"
+assert_model_requires_vertex_auth "explicit-vertex-beta" "vertex_ai_beta/gemini-2.5-pro" "gemini" "0"
+assert_model_requires_vertex_auth "vertex-resource-path" "projects/my-proj/locations/us-central1/models/gemini-2.5-pro" "anthropic" "0"
+assert_model_requires_vertex_auth "implicit-vertex-default" "gemini-2.5-pro" "vertex_ai" "0"
+assert_model_requires_vertex_auth "nonvertex-provider" "gemini/gemini-2.5-pro" "gemini" "1"
+
+# Whitespace in paths — must be rejected (SAST word-splitting guard)
+assert_vertex_path "space-in-project" "projects/my proj/locations/us/models/foo" 1
+assert_vertex_path "tab-in-model-id" $'models/gemini\t2.5' 1
+assert_vertex_path "space-in-model-id" "models/my model" 1
+
+# Endpoint only exists in excluded directories (.git/, node_modules/).
+# The grep --exclude-dir patterns must prevent matching, so the finding
+# is treated as hallucinated and fallback is allowed → exit 0.
+run_gate_case "endpoint-in-excluded-dir" \
+	"vertex_ai/excluded-dir-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after excluded-dir hallucination fallback" \
+	"2" \
+	"vertex_ai/excluded-dir-primary|vertex_ai/fallback-one" \
+	"<unset>|<unset>"
+
+# Whitespace-only fallback models: STRIX_VERTEX_FALLBACK_MODELS set to "  ".
+# This bypasses the :- default but produces an empty array from read -r -a.
+# The gate should emit "No fallback models configured" (not the misleading
+# "All configured fallback models are the same as the primary model").
+run_gate_case "empty-fallback-models" \
+	"vertex_ai/empty-fb-primary" \
+	"   " \
+	"1" \
+	"No fallback models configured" \
+	"1" \
+	"vertex_ai/empty-fb-primary" \
+	"<unset>"
+
+if [ "$FAILURES" -ne 0 ]; then
+	echo "test_strix_quick_gate: ${FAILURES} failure(s)" >&2
+	exit 1
+fi
+
+echo "test_strix_quick_gate: PASS"

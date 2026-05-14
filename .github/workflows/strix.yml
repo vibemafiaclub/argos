@@ -1,0 +1,286 @@
+name: Strix Security Scan
+
+on:
+  push:
+    branches: [master, main]
+  pull_request_target:
+  schedule:
+    # Weekly scan on protected branches (Mondays at 03:00 UTC).
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: strix-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # cancel-in-progress deliberately disabled: an attacker could force-push
+  # a benign commit to cancel an in-progress scan of a malicious commit.
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  strix:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: audit
+
+      - name: Materialize trusted workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TRUSTED_WORKSPACE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          trusted_workspace="$RUNNER_TEMP/trusted-workspace"
+          trusted_archive="$RUNNER_TEMP/trusted-workspace.tar.gz"
+          mkdir -p "$trusted_workspace"
+          gh api "/repos/${REPOSITORY}/tarball/${TRUSTED_WORKSPACE_SHA}" > "$trusted_archive"
+          tar -xzf "$trusted_archive" -C "$trusted_workspace" --strip-components=1
+          git init -q "$trusted_workspace"
+          gh auth setup-git
+          git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
+          git -C "$trusted_workspace" fetch --no-tags --prune origin "$TRUSTED_WORKSPACE_SHA"
+          git -C "$trusted_workspace" cat-file -e "$TRUSTED_WORKSPACE_SHA^{commit}"
+          {
+            echo "TRUSTED_WORKSPACE=$trusted_workspace"
+            echo "TRUSTED_STRIX_GATE=$trusted_workspace/scripts/ci/strix_quick_gate.sh"
+            echo "TRUSTED_STRIX_GATE_TEST=$trusted_workspace/scripts/ci/test_strix_quick_gate.sh"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch pull request head for trusted scan
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git -C "$TRUSTED_WORKSPACE" fetch --no-tags --prune origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          git -C "$TRUSTED_WORKSPACE" cat-file -e "$PR_HEAD_SHA^{commit}"
+          fetched_head_sha="$(git -C "$TRUSTED_WORKSPACE" rev-parse "refs/remotes/pull/${PR_NUMBER}/head")"
+          test "$fetched_head_sha" = "$PR_HEAD_SHA"
+
+      - name: Self-test Strix gate script
+        run: bash "$TRUSTED_STRIX_GATE_TEST"
+
+      - name: Gate Strix secrets
+        id: gate
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          strix_llm="$(printf '%s' "$STRIX_LLM" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          llm_api_key="$(printf '%s' "$LLM_API_KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$strix_llm" ] || [ -z "$llm_api_key" ]; then
+            # On protected/privileged events, fail-closed: missing secrets must
+            # not silently produce a green check.
+            if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; then
+              echo '::error::Strix secrets not configured on protected or privileged event; failing closed.'
+              exit 1
+            fi
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'Strix secrets not configured; skipping.'
+          else
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate GCP credentials
+        id: gcp_gate
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -n "$GCP_SA_KEY" ]; then
+            echo 'has_gcp=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'has_gcp=false' >> "$GITHUB_OUTPUT"
+            echo 'GCP credentials not configured; Vertex AI auth will not be available.'
+          fi
+
+      - name: Gate model auth prerequisites
+        id: auth_gate
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          DEFAULT_PROVIDER: gemini
+        run: |
+          . "$TRUSTED_WORKSPACE/scripts/ci/strix_model_utils.sh"
+          strix_llm="$(trim_whitespace "$STRIX_LLM")"
+          requires_vertex_auth='false'
+          model_auth_rc=0
+          model_requires_vertex_auth "$strix_llm" || model_auth_rc=$?
+          case "$model_auth_rc" in
+          0)
+            requires_vertex_auth='true'
+            ;;
+          1)
+            ;;
+          *)
+            echo '::error::Unable to classify Strix model authentication requirements; failing closed.'
+            exit "$model_auth_rc"
+            ;;
+          esac
+
+          if [ "$requires_vertex_auth" = 'true' ] && [ "${{ steps.gcp_gate.outputs.has_gcp }}" != 'true' ]; then
+            if [ "$GITHUB_EVENT_NAME" = 'push' ] || [ "$GITHUB_EVENT_NAME" = 'schedule' ] || [ "$GITHUB_EVENT_NAME" = 'pull_request_target' ]; then
+              echo '::error::Vertex-authenticated Strix model requires GCP_SA_KEY on privileged event; failing closed.'
+              exit 1
+            fi
+            echo 'can_run=false' >> "$GITHUB_OUTPUT"
+            echo 'Skipping Strix on pull_request_target because the configured model requires GCP_SA_KEY.'
+          else
+            echo 'can_run=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate to Google Cloud
+        id: gcp_auth
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Relocate generated GCP credentials outside scan target
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' && steps.gcp_gate.outputs.has_gcp == 'true'
+        run: |
+          auth_creds_path="${{ steps.gcp_auth.outputs.credentials_file_path }}"
+          relocated="$(AUTH_CREDS_PATH="$auth_creds_path" python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+          import shutil
+
+          auth_creds_path = Path(os.environ["AUTH_CREDS_PATH"]).resolve(strict=True)
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          github_workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          pattern = r"gha-creds-[A-Za-z0-9]+\.json"
+          if not re.fullmatch(pattern, auth_creds_path.name):
+              raise SystemExit(f"Unexpected auth credential filename: {auth_creds_path.name}")
+
+          allowed_roots = (runner_temp, github_workspace)
+          if not any(root == auth_creds_path.parent or root in auth_creds_path.parents for root in allowed_roots):
+              raise SystemExit(
+                  f"Expected auth-generated credentials inside RUNNER_TEMP or GITHUB_WORKSPACE, got {auth_creds_path}"
+              )
+
+          relocated = runner_temp / "gha-creds-relocated.json"
+          shutil.move(str(auth_creds_path), relocated)
+          print(relocated)
+          PY
+          )"
+          {
+            echo "GOOGLE_GHA_CREDS_PATH=$relocated"
+            echo "GOOGLE_APPLICATION_CREDENTIALS=$relocated"
+            echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=$relocated"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Strix
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        run: |
+          cd "$TRUSTED_WORKSPACE"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --no-cache-dir -r requirements-strix-ci.txt
+
+      - name: Mask LLM API key
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          # Sanitize CR/LF before masking to prevent broken ::add-mask::
+          # commands and potential workflow command injection.
+          sanitized="$(printf '%s' "$LLM_API_KEY" | tr -d '\r\n')"
+          if [ -n "$sanitized" ]; then
+            echo "::add-mask::${sanitized}"
+            trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            if [ -n "$trimmed" ] && [ "$trimmed" != "$sanitized" ]; then
+              echo "::add-mask::${trimmed}"
+            fi
+          fi
+
+      - name: Prepare LLM API key input file
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        env:
+          LLM_API_KEY_SECRET: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -n "$LLM_API_KEY_SECRET" ]; then
+            umask 077
+            llm_api_key_file="$RUNNER_TEMP/llm_api_key.txt"
+            printf '%s' "$LLM_API_KEY_SECRET" > "$llm_api_key_file"
+            echo "LLM_API_KEY_FILE=$llm_api_key_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prepare Strix model input file
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        env:
+          STRIX_LLM_SECRET: ${{ secrets.STRIX_LLM }}
+        run: |
+          umask 077
+          strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
+          if [ -n "$STRIX_LLM_SECRET" ]; then
+            printf '%s' "$STRIX_LLM_SECRET" > "$strix_llm_file"
+          else
+            printf '%s' "gemini/gemini-pro-3.1-preview" > "$strix_llm_file"
+          fi
+          echo "STRIX_LLM_FILE=$strix_llm_file" >> "$GITHUB_ENV"
+
+      - name: Prepare LLM API base input file
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        env:
+          LLM_API_BASE_SECRET: ${{ secrets.LLM_API_BASE }}
+        run: |
+          if [ -n "$LLM_API_BASE_SECRET" ]; then
+            umask 077
+            llm_api_base_file="$RUNNER_TEMP/llm_api_base.txt"
+            printf '%s' "$LLM_API_BASE_SECRET" > "$llm_api_base_file"
+            echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run Strix (quick)
+        if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
+        env:
+          STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
+          STRIX_LLM_DEFAULT_PROVIDER: gemini
+          GEMINI_LOCATION: GLOBAL
+          LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
+          LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
+          STRIX_GEMINI_FALLBACK_MODELS: "gemini/gemini-2.5-flash gemini/gemini-2.5-pro"
+          STRIX_VERTEX_FALLBACK_MODELS: "vertex_ai/gemini-2.5-pro vertex_ai/gemini-2.5-flash"
+          STRIX_TARGET_PATH: ./
+          STRIX_SOURCE_DIRS: .
+          STRIX_REASONING_EFFORT: ${{ github.event_name == 'push' && 'low' || 'minimal' }}
+          STRIX_LLM_MAX_RETRIES: 1
+          LLM_TIMEOUT: 90
+          STRIX_MEMORY_COMPRESSOR_TIMEOUT: 10
+          STRIX_TRANSIENT_RETRY_PER_MODEL: 2
+          STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 3
+          STRIX_PROCESS_TIMEOUT_SECONDS: ${{ github.event_name == 'pull_request_target' && '1200' || '2400' }}
+          STRIX_TOTAL_TIMEOUT_SECONDS: 3000
+          STRIX_PR_SCOPE_MAX_FILES_PER_BATCH: 4
+          STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
+          STRIX_DISABLE_PR_SCOPING: ${{ github.event_name == 'pull_request_target' && '0' || '1' }}
+          GH_TOKEN: ${{ github.event_name == 'pull_request_target' && github.token || '' }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || '' }}
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
+          PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || '' }}
+        run: |
+          cd "$TRUSTED_WORKSPACE"
+          bash "$TRUSTED_STRIX_GATE"
+
+      - name: Collect Strix reports for artifact upload
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' }}
+        run: |
+          if [ -d "$TRUSTED_WORKSPACE/strix_runs" ]; then
+            mkdir -p "$GITHUB_WORKSPACE/strix_runs"
+            cp -R "$TRUSTED_WORKSPACE/strix_runs"/. "$GITHUB_WORKSPACE/strix_runs"/
+          fi
+
+      - name: Upload Strix reports artifact
+        if: ${{ always() && !cancelled() && steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: strix-reports
+          path: strix_runs/
+          if-no-files-found: warn
+          retention-days: 5

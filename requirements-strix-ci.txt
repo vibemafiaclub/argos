@@ -1,0 +1,2 @@
+strix-agent==0.8.3
+google-cloud-aiplatform==1.133.0
