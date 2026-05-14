@@ -11,11 +11,31 @@
 
 next_id:
   ORG: 1
-  PROJ: 1
+  PROJ: 2
   SESS: 1
-  CLI: 1
+  CLI: 2
   BILL: 1
   AUTH: 1
   SHARED: 1  # _shared/ 폴더의 subfunction UC 용. 도메인 prefix 는 SHARED.
 
-usecases: {}
+usecases:
+  UC-CLI-001:
+    file: docs/usecases/cli/UC-CLI-001-self-heal-project-config.md
+    name: stale `.argos/project.json` 을 hook 응답으로 자동 보정한다
+    level: user-goal
+    scope: CLI hook (argos-ai) + 백엔드 events API
+    primary_actor: CLI hook (Claude Code 가 발화)
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-14
+  UC-PROJ-001:
+    file: docs/usecases/project/UC-PROJ-001-transfer-project.md
+    name: 프로젝트를 다른 organization 으로 이동시킨다
+    level: user-goal
+    scope: 웹 대시보드 + 백엔드 API
+    primary_actor: 출발·대상 org 양쪽 OWNER 사용자
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-14
