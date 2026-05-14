@@ -163,15 +163,31 @@ jobs:
           WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
+          emit_decision() {
+            should_scan="$1"
+            reason="$2"
+            is_pr_associated="$3"
+            {
+              echo "should_scan=$should_scan"
+              echo "reason=$reason"
+              echo "is_pr_associated=$is_pr_associated"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          current_is_pr_associated() {
+            if [ -n "${PR_NUMBER:-}" ]; then
+              printf 'true\n'
+            else
+              printf 'false\n'
+            fi
+          }
+
           # Non-PR events (push/schedule/workflow_dispatch) always run the
           # heavy scan so protected-branch audit and weekly sweep evidence is
           # preserved unchanged.
           if [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "pull_request_review" ] && [ "$EVENT_NAME" != "workflow_run" ]; then
             echo "Non-PR event ($EVENT_NAME): running heavy Strix scan."
-            {
-              echo 'should_scan=true'
-              echo 'reason=non-pr-event'
-            } >> "$GITHUB_OUTPUT"
+            emit_decision true non-pr-event false
             exit 0
           fi
 
@@ -180,19 +196,13 @@ jobs:
             PR_HEAD_SHA="$WORKFLOW_RUN_HEAD_SHA"
             if [ "$WORKFLOW_RUN_CONCLUSION" != "success" ]; then
               echo "Upstream workflow_run conclusion is '$WORKFLOW_RUN_CONCLUSION', not 'success'. Deferring heavy Strix scan."
-              {
-                echo 'should_scan=false'
-                echo 'reason=upstream-workflow-not-success'
-              } >> "$GITHUB_OUTPUT"
+              emit_decision false upstream-workflow-not-success "$(current_is_pr_associated)"
               exit 0
             fi
             if [ -n "$PR_NUMBER" ]; then
               if ! pr_info="$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
                 echo "Failed to fetch PR details via GitHub API."
-                {
-                  echo 'should_scan=false'
-                  echo 'reason=api-error-pr-details'
-                } >> "$GITHUB_OUTPUT"
+                emit_decision false api-error-pr-details true
                 exit 0
               fi
               PR_DRAFT="$(printf '%s' "$pr_info" | jq -r '.draft // empty')"
@@ -213,10 +223,7 @@ jobs:
               if [ "$EVENT_NAME" = "workflow_run" ]; then
                 reason='workflow-run-without-pr'
               fi
-              {
-                echo 'should_scan=false'
-                echo "reason=$reason"
-              } >> "$GITHUB_OUTPUT"
+              emit_decision false "$reason" false
               exit 0
             fi
           fi
@@ -225,35 +232,29 @@ jobs:
           # re-triggers the workflow via the `ready_for_review` PR type.
           if [ "$PR_DRAFT" = "true" ]; then
             echo "Draft PR #$PR_NUMBER: deferring heavy Strix scan."
-            {
-              echo 'should_scan=false'
-              echo 'reason=draft-pr'
-            } >> "$GITHUB_OUTPUT"
+            emit_decision false draft-pr "$(current_is_pr_associated)"
             exit 0
           fi
 
-          # Optimization: Check if PR only contains non-source files (e.g. markdown)
+          # Optimization: check whether a PR only contains files outside the
+          # scanner's broad source/manifest set. Keep this list aligned with
+          # scripts/ci/strix_quick_gate.sh::is_supported_source_file plus the
+          # dependency manifests the workflow also treats as scan-relevant.
           files_json="$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null || echo '[]')"
           file_count="$(printf '%s' "$files_json" | jq length 2>/dev/null || echo 0)"
           if [ "$file_count" -gt 0 ] && [ "$file_count" -lt 100 ]; then
-            source_files="$(printf '%s' "$files_json" | jq -r '[.[] | select(.filename | endswith(".java") or endswith(".js") or endswith(".ts") or endswith(".vue") or endswith(".py") or endswith("pom.xml") or endswith("package.json") or endswith("Dockerfile") or endswith(".yml") or endswith(".yaml") or endswith(".properties") or endswith(".xml"))] | length' 2>/dev/null || echo 0)"
+            source_files="$(printf '%s' "$files_json" | jq -r '[.[] | select(.filename | endswith(".java") or endswith(".kt") or endswith(".kts") or endswith(".groovy") or endswith(".scala") or endswith(".py") or endswith(".js") or endswith(".jsx") or endswith(".ts") or endswith(".tsx") or endswith(".vue") or endswith(".yaml") or endswith(".yml") or endswith(".sh") or endswith(".sql") or endswith(".xml") or endswith(".json") or endswith(".md") or endswith("pom.xml") or endswith("package.json") or endswith("Dockerfile") or endswith(".properties"))] | length' 2>/dev/null || echo 0)"
             if [ "$source_files" -eq 0 ]; then
               echo "PR #$PR_NUMBER only contains non-source changes. Deferring heavy Strix scan."
-              {
-                echo 'should_scan=false'
-                echo 'reason=no-source-changes'
-              } >> "$GITHUB_OUTPUT"
+              emit_decision false no-source-changes "$(current_is_pr_associated)"
               exit 0
             fi
           fi
-          
+
           # Short-circuit pull_request_review events that are not approvals.
           if [ "$EVENT_NAME" = "pull_request_review" ] && [ "$REVIEW_STATE" != "approved" ]; then
             echo "Review state is '$REVIEW_STATE', not 'approved'. Deferring heavy Strix scan."
-            {
-              echo 'should_scan=false'
-              echo 'reason=review-not-approved'
-            } >> "$GITHUB_OUTPUT"
+            emit_decision false review-not-approved "$(current_is_pr_associated)"
             exit 0
           fi
 
@@ -265,27 +266,18 @@ jobs:
             if ! has_label="$(gh api "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/labels" \
               --jq '[.[] | select(.name == "run-strix")] | length' 2>/dev/null)"; then
               echo "Failed to fetch labels via GitHub API."
-              {
-                echo 'should_scan=false'
-                echo 'reason=api-error-labels'
-              } >> "$GITHUB_OUTPUT"
+              emit_decision false api-error-labels true
               exit 0
             fi
             if [ "${has_label:-0}" -gt 0 ]; then
               echo "Label 'run-strix' present on PR #$PR_NUMBER: running heavy Strix scan."
-              {
-                echo 'should_scan=true'
-                echo 'reason=run-strix-label'
-              } >> "$GITHUB_OUTPUT"
+              emit_decision true run-strix-label true
               exit 0
             fi
 
             if ! pr_json="$(gh api "repos/${REPO_FULL_NAME}/pulls/${PR_NUMBER}" 2>/dev/null)"; then
               echo "Failed to fetch PR details via GitHub API."
-              {
-                echo 'should_scan=false'
-                echo 'reason=api-error-pr-details'
-              } >> "$GITHUB_OUTPUT"
+              emit_decision false api-error-pr-details true
               exit 0
             fi
             auto_merge="$(printf '%s' "$pr_json" | jq -r '.auto_merge // empty' 2>/dev/null || true)"
@@ -297,10 +289,7 @@ jobs:
               --jq "[.[] | select(.state == \"APPROVED\" and .commit_id == \"${PR_HEAD_SHA}\")] | length" \
               2>/dev/null)"; then
               echo "Failed to fetch reviews via GitHub API."
-              {
-                echo 'should_scan=false'
-                echo 'reason=api-error-reviews'
-              } >> "$GITHUB_OUTPUT"
+              emit_decision false api-error-reviews true
               exit 0
             fi
             total_approved=0
@@ -341,10 +330,8 @@ jobs:
              # dummy shims, dynamic Automatic Dependency Submission runs, and
              # optional workflow noise that are not part of the stable gate.
              stable_required_contexts_json='[
-               {"name":"All service images built gate","app_slug":"github-actions","workflow_path":".github/workflows/build-and-push-images.yml"},
-               {"name":"PR coverage/docstring 80% merge gate","app_slug":"github-actions","workflow_path":".github/workflows/pr-coverage-docstring-gate.yml"},
+               {"name":"build","app_slug":"github-actions","workflow_path":".github/workflows/ci.yml"},
                {"name":"dependency-review","app_slug":"github-actions","workflow_path":".github/workflows/dependency-review.yml"},
-               {"name":"semgrep/ci","app_slug":"github-actions","workflow_path":".github/workflows/semgrep.yml"},
                {"name":"scan","app_slug":"github-actions","workflow_path":".github/workflows/osvscanner.yml"}
              ]'
              missing_required_contexts="$(printf '%s' "$checks_json" | jq -r --argjson required "$stable_required_contexts_json" '
@@ -421,18 +408,12 @@ jobs:
             && [ "$cond_mergeable" = 'yes' ] \
             && [ "$cond_checks_green" = 'yes' ]; then
             echo "Merge-readiness conditions satisfied: running heavy Strix scan as the final AI security evidence lane."
-            {
-              echo 'should_scan=true'
-              echo 'reason=ready-to-merge-all-conditions'
-            } >> "$GITHUB_OUTPUT"
+            emit_decision true ready-to-merge-all-conditions "$(current_is_pr_associated)"
             exit 0
           fi
 
           echo "PR #$PR_NUMBER not yet ready-to-merge (auto_merge=${cond_auto_merge}, approved_on_head=${cond_approved}, mergeable=${cond_mergeable}, checks_green=${cond_checks_green}); deferring heavy Strix scan."
-          {
-            echo 'should_scan=false'
-            echo 'reason=awaiting-merge-readiness'
-          } >> "$GITHUB_OUTPUT"
+          emit_decision false awaiting-merge-readiness "$(current_is_pr_associated)"
 
       - name: Prepare workflow_run scan target
         id: prepare_workflow_run_target
@@ -745,7 +726,7 @@ jobs:
       - name: Run Strix (quick)
         id: strix_quick
         if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
-        continue-on-error: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && steps.decide.outputs.reason != 'non-pr-event' && steps.decide.outputs.reason != 'workflow-run-without-pr') }}
+        continue-on-error: ${{ steps.decide.outputs.is_pr_associated == 'true' }}
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
           # NOTE: STRIX_LLM_DEFAULT_PROVIDER is intentionally not set —
@@ -787,7 +768,7 @@ jobs:
           STRIX_TARGET_PATH: ${{ github.event_name == 'workflow_run' && './strix-pr-head' || './' }}
           STRIX_PR_BOUNDED_SCOPE: "0"
           STRIX_DISABLE_PR_SCOPING: "1"
-          STRIX_PR_ASSOCIATED_EVENT: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) }}
+          STRIX_PR_ASSOCIATED_EVENT: ${{ steps.decide.outputs.is_pr_associated == 'true' }}
           GH_TOKEN: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || github.event_name == 'workflow_run') && github.token || '' }}
           PR_NUMBER: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.number || ((github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) && github.event.workflow_run.pull_requests[0].number || '') }}
           PR_BASE_SHA: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.sha || ((github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number != null && github.event.workflow_run.pull_requests[1].number == null) && github.event.workflow_run.pull_requests[0].base.sha || '') }}
@@ -805,7 +786,7 @@ jobs:
           STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON: ${{ steps.prepare_workflow_run_target.outputs.reason || env.STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON }}
           WORKFLOW_RUN_PREPARE_DEFERRED: ${{ steps.prepare_workflow_run_target.outputs.deferred || env.STRIX_WORKFLOW_RUN_PREPARE_DEFERRED }}
           WORKFLOW_RUN_PREPARE_DEFER_REASON: ${{ steps.prepare_workflow_run_target.outputs.reason || env.STRIX_WORKFLOW_RUN_PREPARE_DEFER_REASON }}
-          IS_PR_ASSOCIATED_SCAN: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || (github.event_name == 'workflow_run' && steps.decide.outputs.reason != 'non-pr-event' && steps.decide.outputs.reason != 'workflow-run-without-pr') }}
+          IS_PR_ASSOCIATED_SCAN: ${{ steps.decide.outputs.is_pr_associated == 'true' }}
         run: |
           # shellcheck disable=SC2016 # Markdown literals intentionally use backticks.
           if [ "$WORKFLOW_RUN_PREPARE_DEFERRED" = "true" ]; then
