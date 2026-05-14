@@ -71,7 +71,19 @@ assert_workflow_strix_policy_static_guards() {
 		"workflow no-source optimization must include JSON files"
 }
 
+assert_osv_workflow_static_guards() {
+	local workflow_file="$REPO_ROOT/.github/workflows/osvscanner.yml"
+
+	assert_file_not_contains "$workflow_file" "--skip-git" \
+		"OSV workflow must not pass unsupported --skip-git flag"
+	assert_file_contains "$workflow_file" "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" \
+		"OSV workflow must pin checkout action to an immutable commit"
+	assert_file_contains "$workflow_file" "google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2" \
+		"OSV workflow must pin OSV Scanner action to an immutable commit"
+}
+
 assert_workflow_strix_policy_static_guards
+assert_osv_workflow_static_guards
 
 run_gate_case() {
 	local scenario="$1"
