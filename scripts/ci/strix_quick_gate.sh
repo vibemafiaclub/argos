@@ -80,6 +80,19 @@ PULL_REQUEST_SCOPE_DIRS=()
 LAST_PULL_REQUEST_SCOPE_DIR=""
 PR_SCA_VERIFICATION_STATE="unknown"
 
+is_preexisting_artifact_report_dir() {
+	local candidate="$1"
+	local existing
+
+	for existing in "${PREEXISTING_ARTIFACT_REPORT_DIRS[@]}"; do
+		if [ "$candidate" = "$existing" ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
 # shellcheck disable=SC2317,SC2329  # invoked from cleanup trap
 publish_artifact_reports() {
 	local default_reports_snapshot=""
@@ -322,19 +335,6 @@ is_preexisting_report_dir() {
 	local existing
 
 	for existing in "${PREEXISTING_REPORT_DIRS[@]}"; do
-		if [ "$candidate" = "$existing" ]; then
-			return 0
-		fi
-	done
-
-	return 1
-}
-
-is_preexisting_artifact_report_dir() {
-	local candidate="$1"
-	local existing
-
-	for existing in "${PREEXISTING_ARTIFACT_REPORT_DIRS[@]}"; do
 		if [ "$candidate" = "$existing" ]; then
 			return 0
 		fi

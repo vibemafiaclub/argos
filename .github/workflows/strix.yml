@@ -123,10 +123,11 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           }
           if [ -z "$strix_llm" ] || [ -z "$llm_api_key" ]; then
-            # On push/schedule to protected branches, fail-closed: missing
-            # secrets must not silently produce a green check. Manual
-            # workflow_dispatch scans are operator-requested security runs and
-            # use the same fail-closed contract.
+            # On protected-branch scans (direct schedule or push-backed
+            # workflow_run), fail closed: missing secrets must not silently
+            # produce a green check. Manual workflow_dispatch scans are
+            # operator-requested security runs and use the same fail-closed
+            # contract.
             is_fail_closed='false'
             if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
               is_fail_closed='true'

@@ -132,8 +132,8 @@ normalize_model() {
 	local raw_model="$1"
 	raw_model="$(trim_whitespace "$raw_model")"
 	if [ -z "$raw_model" ]; then
-		echo "$raw_model"
-		return 0
+		echo "ERROR: STRIX_LLM model identifier must not be empty." >&2
+		return 2
 	fi
 
 	if is_provider_qualified_model "$raw_model"; then

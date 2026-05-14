@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { spawn } from 'child_process'
@@ -48,13 +48,16 @@ export interface SendEventBackgroundOpts {
  */
 export function buildSelfHealScript({
   tmpFile,
+  tmpDir,
   projectJsonPath,
 }: {
   tmpFile: string
+  tmpDir?: string
   projectJsonPath: string
 }): string {
   // Serialize paths as JSON so they are safely embedded in the script string.
   const tmpFileJson = JSON.stringify(tmpFile)
+  const tmpDirJson = tmpDir ? JSON.stringify(tmpDir) : 'null'
   const projectJsonPathJson = JSON.stringify(projectJsonPath)
 
   return [
@@ -91,8 +94,8 @@ export function buildSelfHealScript({
     `fs.renameSync(atomicTmp,${projectJsonPathJson});`,
     `}catch{try{fs.unlinkSync(atomicTmp);}catch{}}`,
     `}catch{}`,
-    // Cleanup tmp file in finally (runs whether self-heal succeeded or any early return)
-    `finally{try{fs.unlinkSync(${tmpFileJson});}catch{}}`,
+    // Cleanup tmp file/dir in finally (runs whether self-heal succeeded or any early return)
+    `finally{try{fs.unlinkSync(${tmpFileJson});}catch{};if(${tmpDirJson})try{fs.rmSync(${tmpDirJson},{recursive:true,force:true});}catch{}}`,
     `})()`,
   ].join('')
 }
@@ -109,15 +112,17 @@ export function buildSelfHealScript({
 export function sendEventBackground(opts: SendEventBackgroundOpts): void {
   const { url, token, payload, projectJsonPath, currentConfig } = opts
 
-  const tmpFile = join(tmpdir(), `argos-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+  let tmpDir: string | undefined
   try {
+    tmpDir = mkdtempSync(join(tmpdir(), 'argos-'))
+    const tmpFile = join(tmpDir, 'payload.json')
     writeFileSync(
       tmpFile,
       JSON.stringify({ url, token, payload, projectJsonPath, currentConfig }),
       'utf8',
     )
 
-    const script = buildSelfHealScript({ tmpFile, projectJsonPath })
+    const script = buildSelfHealScript({ tmpFile, tmpDir, projectJsonPath })
 
     const child = spawn(process.execPath, ['-e', script], {
       detached: true,
@@ -125,6 +130,8 @@ export function sendEventBackground(opts: SendEventBackgroundOpts): void {
     })
     child.unref()
   } catch {
-    try { if (existsSync(tmpFile)) unlinkSync(tmpFile) } catch {}
+    try {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true })
+    } catch {}
   }
 }

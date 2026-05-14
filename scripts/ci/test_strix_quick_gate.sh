@@ -3050,6 +3050,13 @@ run_gate_case "nonrecoverable" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid"
 
+run_gate_case "empty-primary-model" \
+	"" \
+	"vertex_ai/fallback-one" \
+	"2" \
+	"ERROR: STRIX_LLM_FILE must contain a non-empty model value." \
+	"0"
+
 run_gate_case "provider-prefix-required" \
 	"gemini-2.5-pro" \
 	"vertex_ai/fallback-one" \
