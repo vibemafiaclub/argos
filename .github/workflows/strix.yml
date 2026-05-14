@@ -69,7 +69,7 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          STRIX_LLM: "gemini/gemini-2.5-pro"
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
           strix_llm="$(printf '%s' "$STRIX_LLM" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -104,7 +104,7 @@ jobs:
         id: auth_gate
         if: steps.gate.outputs.enabled == 'true'
         env:
-          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          STRIX_LLM: "gemini/gemini-2.5-pro"
           DEFAULT_PROVIDER: gemini
         run: |
           . "$TRUSTED_WORKSPACE/scripts/ci/strix_model_utils.sh"
@@ -214,7 +214,7 @@ jobs:
       - name: Prepare Strix model input file
         if: steps.gate.outputs.enabled == 'true' && steps.auth_gate.outputs.can_run == 'true'
         env:
-          STRIX_LLM_SECRET: ${{ secrets.STRIX_LLM }}
+          STRIX_LLM_SECRET: "gemini/gemini-2.5-pro"
         run: |
           umask 077
           strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
