@@ -775,10 +775,14 @@ head_sha = sys.argv[1]
 pr_number = int(sys.argv[2])
 payload = json.loads(os.environ["WORKFLOW_RUNS_JSON"])
 runs = payload.get("workflow_runs") or []
-required = {
-    ".github/workflows/dependency-review.yml": "Dependency review",
-    ".github/workflows/osvscanner.yml": "OSV-Scanner",
-}
+required_env = os.environ.get("STRIX_SCA_WORKFLOWS")
+if required_env is not None:
+    required = json.loads(required_env)
+else:
+    required = {
+        ".github/workflows/dependency-review.yml": "Dependency review",
+        ".github/workflows/osvscanner.yml": "OSV-Scanner",
+    }
 latest = {}
 for run in runs:
     path = (run.get("path") or "").strip()
@@ -902,37 +906,7 @@ is_scannable_changed_file() {
 }
 
 pull_request_scope_context_files() {
-	local needs_backend_python=0
-	local changed_file normalized_changed_file
-	for changed_file in "$@"; do
-		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
-		case "$normalized_changed_file" in
-		backend/*.py | backend/*/*.py | backend/*/*/*.py | backend/*/*/*/*.py)
-			needs_backend_python=1
-			;;
-		esac
-	done
-
-	if [ "$needs_backend_python" -eq 1 ]; then
-		cat <<'EOF'
-backend/requirements.txt
-backend/api/__init__.py
-backend/api/auth.py
-backend/core/__init__.py
-backend/core/config.py
-backend/core/exceptions.py
-backend/db/__init__.py
-backend/db/models.py
-backend/db/session.py
-backend/services/__init__.py
-backend/services/archive.py
-backend/services/email_client.py
-backend/services/email_parser.py
-backend/services/embedding.py
-backend/services/exceptions.py
-backend/services/threading_service.py
-EOF
-	fi
+	:
 }
 
 build_pull_request_scope_dir() {

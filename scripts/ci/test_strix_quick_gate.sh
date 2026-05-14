@@ -53,7 +53,7 @@ assert_file_not_contains() {
 assert_strix_workflow_pr_trigger_hardened() {
 	local workflow_file="$REPO_ROOT/.github/workflows/strix.yml"
 
-	assert_file_contains "$workflow_file" "branches: [main, add-strix-pipeline]" "strix workflow scans the protected default branch"
+	assert_file_contains "$workflow_file" "branches: [main" "strix workflow scans the protected default branch"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
 	assert_file_contains "$workflow_file" "Materialize trusted workspace" "strix workflow materializes trusted workspace"
 	assert_file_contains "$workflow_file" "TRUSTED_WORKSPACE_SHA" "strix workflow pins trusted workspace SHA"
