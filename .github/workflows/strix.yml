@@ -2,7 +2,8 @@ name: Strix Security Scan
 
 on:
   push:
-    branches: [master, main]
+    branches:
+      - '**'
   pull_request_target:
   schedule:
     # Weekly scan on protected branches (Mondays at 03:00 UTC).
