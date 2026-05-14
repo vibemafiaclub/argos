@@ -101,31 +101,31 @@ extract_vertex_model_id() {
 	case "$n" in
 	8) # projects/<p>/locations/<l>/publishers/<pub>/models/<id>
 		if [[ "${parts[0]}" == "projects" && "${parts[2]}" == "locations" && "${parts[4]}" == "publishers" && "${parts[6]}" == "models" ]]; then
-			echo "${parts[7]}"
+			printf '%s\n' "${parts[7]}"
 			return 0
 		fi
 		;;
 	6) # projects/<p>/locations/<l>/models/<id>
 		if [[ "${parts[0]}" == "projects" && "${parts[2]}" == "locations" && "${parts[4]}" == "models" ]]; then
-			echo "${parts[5]}"
+			printf '%s\n' "${parts[5]}"
 			return 0
 		fi
 		;;
 	4) # publishers/<pub>/models/<id>
 		if [[ "${parts[0]}" == "publishers" && "${parts[2]}" == "models" ]]; then
-			echo "${parts[3]}"
+			printf '%s\n' "${parts[3]}"
 			return 0
 		fi
 		;;
 	2) # models/<id>
 		if [[ "${parts[0]}" == "models" ]]; then
-			echo "${parts[1]}"
+			printf '%s\n' "${parts[1]}"
 			return 0
 		fi
 		;;
 	esac
 
-	echo "$raw_model"
+	printf '%s\n' "$raw_model"
 }
 
 normalize_model() {

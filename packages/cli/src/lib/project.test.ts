@@ -32,6 +32,7 @@ describe('findProjectConfigWithPath', () => {
       expect(result?.config.projectId).toBe('project-1')
       expect(result?.configPath).toBe(realpathSync(resolve(repoRoot, '.argos', 'project.json')))
     } finally {
+      process.chdir(originalCwd)
       rmSync(tmpRoot, { recursive: true, force: true })
     }
   })

@@ -39,6 +39,19 @@ describe('buildSelfHealScript', () => {
     expect(script).toContain('renameSync')
   })
 
+  it('holds an inter-process lock while rewriting project.json', () => {
+    expect(script).toContain(`const lockDir=${JSON.stringify(PROJECT_JSON_PATH)}+'.lock'`)
+    const mkdirIdx = script.indexOf('fs.mkdirSync(lockDir)')
+    const readIdx = script.indexOf(`JSON.parse(fs.readFileSync(${JSON.stringify(PROJECT_JSON_PATH)},'utf8'))`)
+    const renameIdx = script.indexOf(`fs.renameSync(atomicTmp,${JSON.stringify(PROJECT_JSON_PATH)})`)
+    const releaseIdx = script.indexOf('fs.rmdirSync(lockDir)')
+
+    expect(mkdirIdx).toBeGreaterThanOrEqual(0)
+    expect(readIdx).toBeGreaterThan(mkdirIdx)
+    expect(renameIdx).toBeGreaterThan(readIdx)
+    expect(releaseIdx).toBeGreaterThan(renameIdx)
+  })
+
   it('(d) contains res.status !== 202 guard', () => {
     expect(script).toContain('res.status!==202')
   })

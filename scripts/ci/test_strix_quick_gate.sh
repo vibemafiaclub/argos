@@ -4830,10 +4830,12 @@ assert_vertex_extract "models/<id>" "models/gemini-2.5-pro" "gemini-2.5-pro"
 assert_vertex_extract "publishers/<p>/models/<id>" "publishers/google/models/gemini-2.5-pro" "gemini-2.5-pro"
 assert_vertex_extract "projects/<p>/locations/<l>/models/<id>" "projects/my-proj/locations/global/models/gemini-2.5-pro" "gemini-2.5-pro"
 assert_vertex_extract "projects/…/publishers/…/models/<id>" "projects/my-proj/locations/global/publishers/google/models/gemini-2.5-pro" "gemini-2.5-pro"
+assert_vertex_extract "models/<dash-leading-id>" "models/-n" "-n"
 
 # extract_vertex_model_id — non-vertex paths return as-is
 assert_vertex_extract "non-vertex-passthrough" "deepseek/models/deepseek-r1" "deepseek/models/deepseek-r1"
 assert_vertex_extract "plain-model-passthrough" "gemini-2.5-pro" "gemini-2.5-pro"
+assert_vertex_extract "dash-leading-passthrough" "-n" "-n"
 
 # Whitespace in paths — must be rejected (SAST word-splitting guard)
 assert_vertex_path "space-in-project" "projects/my proj/locations/us/models/foo" 1
