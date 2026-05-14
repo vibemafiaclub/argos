@@ -4804,10 +4804,11 @@ run_gate_case "endpoint-in-excluded-dir" \
 	"<unset>|<unset>"
 
 # Regression test for Issue #2181: Ensure STRIX_INSTRUCTION_FILE is passed
-tmpfile=$(mktemp)
+instruction_runner_temp=$(mktemp -d)
+tmpfile=$(mktemp "$instruction_runner_temp/strix-instructions.XXXXXX")
 echo 'trusted env instructions' > "$tmpfile"
 argv_log=$(mktemp)
-RUNNER_TEMP="/tmp" FAKE_STRIX_ARGV_LOG="$argv_log" STRIX_INSTRUCTION_FILE="$tmpfile" run_gate_case "success" \
+RUNNER_TEMP="$instruction_runner_temp" FAKE_STRIX_ARGV_LOG="$argv_log" STRIX_INSTRUCTION_FILE="$tmpfile" run_gate_case "success" \
 	"vertex_ai/success-primary" \
 	"" \
 	"0" \
@@ -4817,7 +4818,7 @@ RUNNER_TEMP="/tmp" FAKE_STRIX_ARGV_LOG="$argv_log" STRIX_INSTRUCTION_FILE="$tmpf
 	"<unset>"
 assert_file_contains "$argv_log" "--instruction-file" "must pass --instruction-file"
 assert_file_contains "$argv_log" "$tmpfile" "must pass the instruction file path"
-rm -f "$tmpfile" "$argv_log"
+rm -rf "$instruction_runner_temp" "$argv_log"
 
 # Whitespace-only fallback models: STRIX_VERTEX_FALLBACK_MODELS set to "  ".
 # This bypasses the :- default but produces an empty array from read -r -a.
