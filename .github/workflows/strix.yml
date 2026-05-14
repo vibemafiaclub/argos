@@ -125,12 +125,12 @@ jobs:
           esac
 
           if [ "$requires_vertex_auth" = 'true' ] && [ "${{ steps.gcp_gate.outputs.has_gcp }}" != 'true' ]; then
-            if [ "$GITHUB_EVENT_NAME" = 'push' ] || [ "$GITHUB_EVENT_NAME" = 'schedule' ] || [ "$GITHUB_EVENT_NAME" = 'pull_request_target' ]; then
+            if [ "$GITHUB_EVENT_NAME" = 'push' ] || [ "$GITHUB_EVENT_NAME" = 'schedule' ] || [ "$GITHUB_EVENT_NAME" = 'pull_request_target' ] || [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
               echo '::error::Vertex-authenticated Strix model requires GCP_SA_KEY on privileged event; failing closed.'
               exit 1
             fi
             echo 'can_run=false' >> "$GITHUB_OUTPUT"
-            echo 'Skipping Strix on pull_request_target because the configured model requires GCP_SA_KEY.'
+            echo "Skipping Strix on ${GITHUB_EVENT_NAME} because the configured model requires GCP_SA_KEY."
           else
             echo 'can_run=true' >> "$GITHUB_OUTPUT"
           fi
