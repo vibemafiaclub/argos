@@ -8,6 +8,7 @@ import {
   resolveOrgScopedProjectIds,
 } from '@/lib/server/dashboard-route-helper'
 import { mapSkillRow, type RawSkillRow } from '@/lib/server/dashboard-row-mapping'
+import { skillCallRowsRelation } from '@/lib/server/skill-aggregation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,58 +35,19 @@ export async function GET(
     const toQuery = req.nextUrl.searchParams.get('to') ?? undefined
     const { from, to } = parseDateRange(fromQuery, toQuery)
 
+    // parseDateRange returns `to` as an inclusive upper bound (23:59:59.999).
+    // skillCallRowsRelation uses a half-open [from, toExclusive) interval,
+    // so add 1 ms to make `< toExclusive` equivalent to `<= to`. (Decision-8)
+    const toExclusive = new Date(to.getTime() + 1)
+
     if (projectIds.length === 0) {
       return NextResponse.json({ skills: [] })
     }
 
+    const skillRows = skillCallRowsRelation(projectIds, from, toExclusive)
+
     const skills = await db.$queryRaw<RawSkillRow[]>`
-      WITH event_skill_calls AS (
-        SELECT
-          skill_name,
-          session_id,
-          user_id,
-          timestamp,
-          events.project_id AS project_id
-        FROM events
-        WHERE is_skill_call = true
-          AND project_id = ANY(${projectIds}::text[])
-          AND skill_name IS NOT NULL
-          AND timestamp >= ${from}
-          AND timestamp <= ${to}
-      ),
-      message_slash_calls AS (
-        SELECT
-          slash_match.match[1] AS skill_name,
-          m.session_id,
-          s.user_id,
-          m.timestamp,
-          s.project_id AS project_id
-        FROM messages m
-        JOIN claude_sessions s ON s.id = m.session_id
-        CROSS JOIN LATERAL regexp_matches(
-          m.content,
-          '<command-message>[^<]*</command-message>[[:space:]]*<command-name>/?([^<[:space:]]+)</command-name>',
-          'g'
-        ) AS slash_match(match)
-        WHERE m.role = 'HUMAN'
-          AND s.project_id = ANY(${projectIds}::text[])
-          AND m.timestamp >= ${from}
-          AND m.timestamp <= ${to}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM events e
-            WHERE e.session_id = m.session_id
-              AND e.is_skill_call = true
-              AND e.is_slash_command = true
-              AND e.skill_name = slash_match.match[1]
-          )
-      ),
-      -- all_skill_calls: union CTE 를 독립 CTE 로 승격 — skill_events 와 skill_project_aggregates 가 공유하므로 union 중복 실행 방지 (ADR-025)
-      all_skill_calls AS (
-        SELECT * FROM event_skill_calls
-        UNION ALL
-        SELECT * FROM message_slash_calls
-      ),
+      WITH skill_call_rows AS (${skillRows}),
       skill_events AS (
         SELECT
           skill_name,
@@ -93,7 +55,7 @@ export async function GET(
           COUNT(DISTINCT session_id) AS session_count,
           COUNT(DISTINCT user_id)    AS user_count,
           MAX(timestamp)             AS last_used_at
-        FROM all_skill_calls
+        FROM skill_call_rows
         GROUP BY skill_name
       ),
       skill_durations AS (
@@ -108,11 +70,11 @@ export async function GET(
           AND m.role = 'TOOL'
           AND m.duration_ms IS NOT NULL
           AND m.timestamp >= ${from}
-          AND m.timestamp <= ${to}
+          AND m.timestamp < ${toExclusive}
         GROUP BY m.tool_input->>'skill'
       ),
       -- skill_project_aggregates: skill+project 차원 집계. 다중 권한 가드 (G4·M2):
-      --   1) all_skill_calls base 가 이미 project_id = ANY(projectIds) 필터
+      --   1) skill_call_rows base 가 이미 project_id = ANY(projectIds) 필터
       --   2) WHERE 절에서 redundant 하지만 명시적으로 재가드
       --   3) JOIN projects 에 p.org_id 가드로 org 격리
       skill_project_aggregates AS (
@@ -122,7 +84,7 @@ export async function GET(
           p.name AS project_name,
           COUNT(*) AS invocations,
           MAX(sc.timestamp) AS last_used_at
-        FROM all_skill_calls sc
+        FROM skill_call_rows sc
         JOIN projects p
           ON p.id = sc.project_id
          AND p.org_id = ${access.org.id}
@@ -182,7 +144,7 @@ export async function GET(
       FROM skill_events e
       LEFT JOIN skill_durations d USING (skill_name)
       LEFT JOIN skill_project_breakdown b USING (skill_name)
-      ORDER BY e.call_count DESC, e.skill_name ASC
+      ORDER BY e.call_count DESC, e.skill_name COLLATE "C" ASC
       LIMIT 50
     `
 
