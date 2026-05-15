@@ -6,7 +6,7 @@ scope: 웹 대시보드 (`/dashboard/[orgSlug]/skills`) + 백엔드 API (`/api/o
 primary_actor: org 의 멤버 사용자 (OWNER/ADMIN/MEMBER 동일 동작)
 status: active
 includes: []
-related: [UC-PROJ-001]
+related: [UC-PROJ-001, UC-SESS-003]
 e2e: []
 coverage_status: pending
 sources:
