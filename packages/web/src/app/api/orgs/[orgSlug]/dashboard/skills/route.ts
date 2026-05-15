@@ -8,6 +8,7 @@ import {
   resolveOrgScopedProjectIds,
 } from '@/lib/server/dashboard-route-helper'
 import { mapSkillRow, type RawSkillRow } from '@/lib/server/dashboard-row-mapping'
+import { skillCallRowsRelation } from '@/lib/server/skill-aggregation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,50 +35,19 @@ export async function GET(
     const toQuery = req.nextUrl.searchParams.get('to') ?? undefined
     const { from, to } = parseDateRange(fromQuery, toQuery)
 
+    // parseDateRange returns `to` as an inclusive upper bound (23:59:59.999).
+    // skillCallRowsRelation uses a half-open [from, toExclusive) interval,
+    // so add 1 ms to make `< toExclusive` equivalent to `<= to`. (Decision-8)
+    const toExclusive = new Date(to.getTime() + 1)
+
     if (projectIds.length === 0) {
       return NextResponse.json({ skills: [] })
     }
 
+    const skillRows = skillCallRowsRelation(projectIds, from, toExclusive)
+
     const skills = await db.$queryRaw<RawSkillRow[]>`
-      WITH event_skill_calls AS (
-        SELECT
-          skill_name,
-          session_id,
-          user_id,
-          timestamp
-        FROM events
-        WHERE is_skill_call = true
-          AND project_id = ANY(${projectIds}::text[])
-          AND skill_name IS NOT NULL
-          AND timestamp >= ${from}
-          AND timestamp <= ${to}
-      ),
-      message_slash_calls AS (
-        SELECT
-          slash_match.match[1] AS skill_name,
-          m.session_id,
-          s.user_id,
-          m.timestamp
-        FROM messages m
-        JOIN claude_sessions s ON s.id = m.session_id
-        CROSS JOIN LATERAL regexp_matches(
-          m.content,
-          '<command-message>[^<]*</command-message>[[:space:]]*<command-name>/?([^<[:space:]]+)</command-name>',
-          'g'
-        ) AS slash_match(match)
-        WHERE m.role = 'HUMAN'
-          AND s.project_id = ANY(${projectIds}::text[])
-          AND m.timestamp >= ${from}
-          AND m.timestamp <= ${to}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM events e
-            WHERE e.session_id = m.session_id
-              AND e.is_skill_call = true
-              AND e.is_slash_command = true
-              AND e.skill_name = slash_match.match[1]
-          )
-      ),
+      WITH skill_call_rows AS (${skillRows}),
       skill_events AS (
         SELECT
           skill_name,
@@ -85,11 +55,7 @@ export async function GET(
           COUNT(DISTINCT session_id) AS session_count,
           COUNT(DISTINCT user_id)    AS user_count,
           MAX(timestamp)             AS last_used_at
-        FROM (
-          SELECT * FROM event_skill_calls
-          UNION ALL
-          SELECT * FROM message_slash_calls
-        ) all_skill_calls
+        FROM skill_call_rows
         GROUP BY skill_name
       ),
       skill_durations AS (
@@ -104,7 +70,7 @@ export async function GET(
           AND m.role = 'TOOL'
           AND m.duration_ms IS NOT NULL
           AND m.timestamp >= ${from}
-          AND m.timestamp <= ${to}
+          AND m.timestamp < ${toExclusive}
         GROUP BY m.tool_input->>'skill'
       )
       SELECT
@@ -117,7 +83,7 @@ export async function GET(
         d.duration_sample_count
       FROM skill_events e
       LEFT JOIN skill_durations d USING (skill_name)
-      ORDER BY e.call_count DESC
+      ORDER BY e.call_count DESC, e.skill_name COLLATE "C" ASC
       LIMIT 50
     `
 

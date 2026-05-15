@@ -288,3 +288,115 @@ Web → Vercel, API → Railway로 분리한다.
 - Stop 이벤트 시 bulk insert로 인한 지연 가능 → 비동기 처리로 완화.
 - 프롬프트에 민감 정보(비밀번호, API 키 등)가 포함될 수 있음 → 접근 권한은 org 멤버로 제한.
 - 어시스턴트 메시지는 tool_use 블록을 제외한 text 블록만 저장 (50,000자 truncation).
+
+---
+
+## ADR-013: Dashboard skill 집계 정의 통일 — Skill tool 호출 ∪ messages slash command UNION
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `language:typescript`, `library:prisma`, `area:dashboard-rollup`, `area:api`, `task:2026-05-14-overview-skill-frequency-bug`
+
+### 컨텍스트
+대시보드 두 화면 (`/dashboard/<orgSlug>/skills` 와 `/dashboard/<orgSlug>/overview` 의 "Skill별 호출 빈도" 카드) 이 같은 (orgSlug, from, to, projectId) 조합에서 서로 다른 결과를 반환했다. skills route 는 `events.is_skill_call=true` ∪ `messages` 의 `<command-name>/…</command-name>` 정규식 매칭을 UNION 으로 실시간 집계했지만, overview 가 읽는 `daily_rollups.skillCounts` 는 `events.isSkillCall=true` 만 카운트했다. slash command 위주 org 에서는 overview 카드가 "설계대로" 비어 보였다. 사용자 멘탈 모델은 "slash command 도 skill 호출"이므로, skills route 정의가 진실값이고 rollup 쪽이 어긋난 상태였다.
+
+### 결정
+대시보드의 모든 skill 호출 **카운트** 집계는 **`events.is_skill_call=true` ∪ messages 의 slash command (events anti-join 으로 중복 제거)** 의 UNION 을 단일 정의로 사용한다. `daily_rollups.skillCounts` 빌더, skills route, overview route, weekly-report 의 `summary.topSkills` 가 모두 이 정의를 공유한다. 정의가 분기되면 안 되는 metric.
+
+### 범위 외 (negative space — 본 task 범위 밖, 별도 follow-up task)
+ADR-013 의 UNION 정의는 다음 항목에는 적용되지 않는다. 이들은 여전히 `events.is_skill_call=true` only 정의로 산출된다. 정의 통일은 별도 task 에서 수행한다.
+- `daily-rollup.ts` 의 `userStats.skillCalls` (사용자별 카운트 — `e_agg.skill_calls`)
+- `weekly-report.ts` 의 `queryTopSkillDiversityByUser` (사용자별 skill diversity 리더보드)
+- `weekly-report.ts` 의 `queryForgottenSkills` (past/current skills 비교)
+
+### 근거
+- 사용자가 명시한 정합성 기대치: 두 화면 Top N 의 (skillName, callCount, 순서) 완전 일치 (M1).
+- skills route 가 이미 UNION 정의를 구현 중이고 사용자가 이 결과를 신뢰. overview 를 맞추는 방향이 자연스럽다 (clarify Q4=a).
+- `daily_rollups` 가 weekly-report, dashboard/users 등 다수 호출자에 의해 공유되므로 정의를 한 곳에 두면 자동 회귀 일관성 확보.
+
+### 트레이드오프
+- 기존 `daily_rollups.skillCounts` row 가 옛 정의로 캐시돼 있어 invalidation 필요 (ADR-015 의 lazy 가드로 해결).
+- weekly-report 의 `summary.topSkills` 도 의도적으로 동시 변동. 비-skill KPI 는 회귀 테스트로 불변 보장.
+- 옛 정의의 (Skill tool only) 카운트는 새 정의 카운트의 부분집합이므로 회귀 위험 없음.
+
+### 대안
+- **V1b — rollup 은 그대로 두고 overview API 가 messages-slash 를 실시간 합성**: 백필 불필요로 단순하나, 매 overview 요청마다 정규식 평가 + 정의가 라우트별 분산. weekly-report 와도 어긋남.
+- **skills 페이지를 좁히는 방향 (Q4=b)**: 사용자가 명시적으로 폐기. slash command 도 skill 사용으로 보는 멘탈 모델이 정답.
+- **두 정의를 별도 카드로 표시 (Q4=c)**: 사용자 멘탈 모델 분할 부담 + 카피 변경 부담, 폐기.
+
+### 참고
+- docs/tasks/2026-05-14-overview-skill-frequency-bug/03-plan.md §Decision-1
+- 사용자 발언 인용: "skills 페이지 정의가 정답, overview 를 UNION 으로 통일" (clarify Q4=a)
+
+---
+
+## ADR-014: skill 집계 UNION 정의의 단일 출처 — `skillCallRowsRelation` Prisma.Sql relation helper
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `language:typescript`, `library:prisma`, `area:server-helper`, `pattern:single-source-of-truth`, `task:2026-05-14-overview-skill-frequency-bug`
+
+### 컨텍스트
+ADR-013 의 UNION 정의를 daily-rollup 빌더와 skills route 가 각각 자기 SQL 로 들고 있으면, 향후 한 쪽 정의가 바뀔 때 (예: messages 정규식 보정, anti-join 컬럼 추가) 다른 쪽이 누락돼 다시 어긋난다. 정의를 텍스트로 복붙하면 동일성 검증이 PR 리뷰 인적 절차에 의존한다. 한편 `{ skillName, callCount }` 만 export 하는 thin helper 로는 skills route 가 필요한 추가 컬럼 (session_count, user_count, last_used_at, skill_durations join) 을 함수가 받쳐주지 못해 SQL 중복이 다시 발생한다.
+
+### 결정
+skill 호출의 row-level 정의 자체를 **`Prisma.Sql` relation expression** (`SELECT ... UNION ALL SELECT ...`) 으로 export 하는 helper `skillCallRowsRelation(projectIds, fromInclusive, toExclusive)` 를 도입한다. 호출자는 이 fragment 를 자기 CTE 에 임베드해 (`WITH skill_call_rows AS (${skillCallRowsRelation(...)})`) 그 위에서 자유롭게 GROUP BY / JOIN 한다. 추가로 daily-rollup 등 카운트만 필요한 호출자를 위해 thin wrapper `aggregateSkillCountsForRange(projectIds, fromInclusive, toExclusive)` 를 같은 모듈에 함께 export 한다.
+
+### 근거
+- 정의 변경이 helper 한 군데에서만 일어나면 모든 호출자가 자동 일관.
+- relation expression 반환은 호출자의 집계 형태 (GROUP BY 키, JOIN 대상, ORDER BY) 를 제약하지 않는다. skills route 의 `skill_durations` 같은 route-특화 컬럼이 helper 책임에서 분리됨.
+- `Prisma.sql` 만으로 빌드 (string 연결 금지) 해 SQL injection 방어 + 파라미터 바인딩 안전성 유지.
+- 시간 경계를 half-open `[from, to)` 로 helper 계약에 박아 두면 호출자의 inclusive/exclusive 혼선이 사라진다 (ADR-013 의 metric 일관성 강화).
+
+### 트레이드오프
+- row-level helper 라 호출자가 자기 GROUP BY 책임. 그러나 skills route 의 기존 `skill_events` / `skill_durations` 패턴이 이미 그 구조라 자연스러움.
+- 두 layer (relation expression + count wrapper) export 로 API 표면이 1 → 2 로 늘어남. 그러나 wrapper 가 90% 호출자를 흡수하므로 정신적 부담 작음.
+- `parseDateRange` 의 inclusive `to` (`23:59:59.999`) 와 helper 의 half-open 계약 사이 변환 책임은 호출자 (route) 가 진다 (`toExclusive = new Date(to.getTime() + 1)`).
+
+### 대안
+- **카운트 함수만 export (`aggregateSkillCountsForRange` 단일)**: skills route 의 다른 컬럼 (session_count 등) 을 위해 자체 CTE 를 다시 유지 → 정의가 두 곳으로 분산.
+- **raw SQL string export**: Prisma 파라미터 바인딩 무력화, injection 위험.
+- **`dashboard-row-mapping.ts` 같은 기존 모듈에 합치기**: 매핑/집계 책임이 한 파일에 혼재.
+- **CTE definition 통째로 export (`WITH skill_call_rows AS (...)`)**: 호출자가 추가 CTE 를 chain 할 때 SQL 충돌. relation expression 만 export 가 가장 유연.
+
+### 참고
+- docs/tasks/2026-05-14-overview-skill-frequency-bug/03-plan.md §Decision-2, §WU-1
+
+---
+
+## ADR-015: 공유 rollup metric 정의 변경 시 캐시 무효화 패턴 — `INVALIDATION_AT` lazy 가드 + 보조 oneshot sweep
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `area:dashboard-rollup`, `area:deployment-runbook`, `pattern:lazy-cache-invalidation`, `task:2026-05-14-overview-skill-frequency-bug`
+
+### 컨텍스트
+`daily_project_stats` (a.k.a. `daily_rollups`) 는 lazy compute-on-read 캐시다 (cron 트리거 없음). 어떤 metric 정의 (예: `skillCounts` 의 UNION 정의 적용 — ADR-013) 가 바뀌면 기존 캐시 row 들은 옛 정의로 계산돼 있어 stale 상태가 된다. 다중 인스턴스 (Vercel serverless) 환경에서 새 코드가 굴러가는 중에도 old writer 가 잠시 옛 정의로 upsert 할 수 있어 race condition 위험이 있다. 별도의 schemaVersion 컬럼을 추가하는 방식은 무거우며, 한 metric 만 바뀌어도 전체 row 가 dirty 가 되는 부작용이 있다.
+
+### 결정
+`daily_rollups` 가 공유하는 metric 정의를 변경할 때마다 아래 **3단 패턴** 을 표준 절차로 사용한다.
+
+1. **Primary 가드 (correctness)**: 코드 상수 `<METRIC>_INVALIDATION_AT: Date` (예: `SKILL_COUNTS_INVALIDATION_AT`) 를 PR merge 시각 + 24h 등 충분히 여유 있는 timestamp 로 박는다. `getDailyRollups` 의 cache hit 판정에서 `row.computedAt < INVALIDATION_AT` 인 row 는 절대 `cachedResults` 에 넣지 않고 `missingDays` 로 명시 이동시켜 자연 재계산 + upsert 가 일어나게 한다. **이 단일 조건만으로 correctness 보장**.
+2. **보조 oneshot sweep (speed-up)**: `scripts/invalidate-<metric>.ts` 가 `WHERE computed_at < INVALIDATION_AT` 인 row 를 한 번에 `computed_at='1970-01-01'` 으로 강제하고 metric 컬럼을 비운다. 미실행 시에도 (1) 이 정확성을 보장 — 첫 요청 latency 만 spread 가 안 됨. 멱등 기준은 "두 번째 실행 = 0 rows".
+3. **배포 runbook (race 해소)**: ① 새 코드 (가드 포함) 모든 인스턴스 배포 → ② 안정화 30 분 후 1차 sweep → ③ 10 분 후 2차 sweep (0 rows = race 없음 확정). 1, 2차 도중에 누가 옛 정의로 upsert 해도 그 row 의 computedAt 은 INVALIDATION_AT 보다 미래라 가드에서 자동 stale.
+
+### 근거
+- 가드는 정의 변경 1 회당 상수 1 개만 추가하면 돼서 누적 부담이 작다 (schemaVersion 컬럼 vs).
+- lazy 가드가 correctness 의 1차 원천이므로 oneshot 스크립트 미실행 / runbook 실수 시에도 사용자 화면은 항상 새 정의를 본다. 운영 안전 마진 큼.
+- vercel serverless single-region 가정 하에서 old writer 윈도우는 초 단위. 그 안에 발생한 upsert 도 다음 요청 / 2차 sweep 에서 무효화.
+- 가드 조건이 `computedAt` 단일 비교라 판정 비용 무시 가능.
+
+### 트레이드오프
+- 한 번 박힌 `INVALIDATION_AT` 상수는 immutable. 같은 metric 의 다음 정의 변경 시 새 상수를 또 박아야 한다 (template).
+- 배포 직후 첫 요청들의 latency 가 (lazy 재계산 비용 만큼) 평소보다 길어질 수 있음. 보조 sweep 으로 spread 가능.
+- 가드 조건을 `computedAt < THRESHOLD` 단일로 통일했기 때문에 `skillCounts === '{}'` 같은 합성 가드는 명시적으로 거절. 합성 가드는 스크립트 미실행 row 를 못 잡는 hole 이 있었다.
+
+### 대안
+- **DB schemaVersion 컬럼 추가**: 마이그레이션 + 모든 호출자 코드 변경, 무겁다.
+- **row 전량 delete**: 다른 metric (`sessionCount`, `userStats` 등) 도 같이 재계산돼 비용 폭증.
+- **`computedAt + skillCounts==='{}'` 합성 가드**: 스크립트가 metric 만 비우고 computedAt 은 그대로 두는 경우만 잡힘. 스크립트 미실행 시 hole.
+- **DB advisory lock / maintenance flag**: race 차단은 되지만 다운타임/구현 부담, 본 task 범위 초과.
+
+### 참고
+- docs/tasks/2026-05-14-overview-skill-frequency-bug/03-plan.md §Decision-3, §Decision-9, §WU-3, §WU-10
+- 사용자 발언 인용: "가장 가벼운 전략" (clarify 의 백필 비용 가이드라인)
