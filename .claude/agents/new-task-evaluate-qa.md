@@ -38,9 +38,17 @@ model: inherit
 
 | # | 시나리오 | 결과 | 심각도 | 메모 |
 |---|---------|------|--------|------|
-| 1 | 로그인 → 대시보드 진입 | pass | - | - |
-| 2 | 비어있는 목록 상태에서 신규 추가 | fail | major | 토스트 alert 가 노출되지 않음 |
-| 3 | ... | | | |
+| 1 | 로그인 → 대시보드 진입 | pass(runtime) | - | - |
+| 2 | 비어있는 목록 상태에서 신규 추가 | fail(runtime) | major | 토스트 alert 가 노출되지 않음 |
+| 3 | 키보드 a11y 흐름 | pass(static) | - | 헤드리스 driver 부재 — 컴포넌트 코드 검토로 검증 |
+| 4 | ... | blocked | - | env 미설정 등 사유 |
+
+결과 라벨 규약:
+- `pass(runtime)` / `fail(runtime)`: 실제 앱 기동 후 동작/응답으로 검증.
+- `pass(static)` / `fail(static)`: 헤드리스 브라우저·driver 부재로 컴포넌트 코드 검토·grep 으로 갈음한 검증. 시각 회귀·실제 이벤트 흐름은 잡을 수 없으므로 항상 "메모" 에 갈음 사유 1줄.
+- `blocked`: 환경·시드·credentials 부재로 실행 불가. 사유 명시.
+
+총괄 보고는 `pass(runtime) X / pass(static) Y / fail Z / blocked B` 로 분리 표기. 같은 pass 안에서도 분포가 보이도록.
 
 ## 발견 이슈 (사용자 반영 선택용)
 

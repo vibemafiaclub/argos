@@ -24,6 +24,12 @@ model: inherit
    3. 비평 Read → plan 수정. **수정 시 plan 본문 끝의 "Critique Reflection" 섹션에 항목별 반영/거절 + 사유를 기록한다.** 같은 지적이 반복되지 않게 함.
    4. **종료 조건 (둘 중 하나라도)**: (a) 새 critique 에 `critical` 항목이 없음. (b) plan 작성 너 스스로 "더 비평할 가치 없음" 판단. 셋 다 못 만나면 3회 후 종료.
 4. **최종 plan 확정**. Critique Reflection 섹션에 종료 사유 1줄 명시.
+4.5. **제출 직전 self-cross-check (1~2분)**. 본문의 산문 주장과 본인이 쓴 스니펫/표가 실제로 같은 것을 가리키는지 다음 4축으로 grep 검증:
+   - (a) **부등호·비율·임계값 방향**: "X 가 Y 의 1.2배 이내" 같은 비교식이 실제 부등호 방향과 맞는가 (좌변·우변 헷갈리기 쉬움).
+   - (b) **CTE/함수 재사용 주장**: "X 를 재사용한다" 고 적었으면 본인이 쓴 SQL/코드에서 정말 X 를 from 절·import 로 참조하는가 (인라인 복제 아님).
+   - (c) **Decision-N 교차참조**: 본문에서 "Decision-N" 을 인용했으면 그 N 번이 실제 결정 번호인가 (편집 중 번호 시프트로 어긋나기 쉬움).
+   - (d) **라이브러리 API prop 위치**: "X prop 은 Component.Y 에 붙는다" 고 두 곳 이상에서 언급했으면 두 위치가 같은 컴포넌트를 가리키는가.
+   - 모순 발견 시 본문 수정 후 다음 단계로. 이 self-check 가 critique 의 minor/major 1~3건을 사전 흡수해 critique 루프 수를 줄인다.
 5. 메인에 반환: plan 파일 경로 + 6~10줄 요약 (work unit 개수, 병렬 그룹 수, 주요 리스크 1~2개).
 
 ## plan 스키마 (`docs/tasks/<task_slug>/03-plan.md`)
