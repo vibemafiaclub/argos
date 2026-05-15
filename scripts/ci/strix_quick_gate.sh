@@ -168,6 +168,8 @@ fi
 
 LLM_API_KEY_FILE="${LLM_API_KEY_FILE:-}"
 LLM_API_KEY=""
+GITHUB_API_KEY_FILE="${GITHUB_API_KEY_FILE:-}"
+GITHUB_API_KEY=""
 
 require_non_negative_integer() {
 	local value="$1"
@@ -362,6 +364,18 @@ if model_requires_llm_api_key "$PRIMARY_MODEL"; then
 	LLM_API_KEY="$(trim_whitespace "$(cat -- "$LLM_API_KEY_FILE")")"
 	if [ -z "$LLM_API_KEY" ]; then
 		echo "ERROR: LLM_API_KEY_FILE must contain a non-empty API key for model '$PRIMARY_MODEL'." >&2
+		exit 2
+	fi
+fi
+
+if model_requires_github_api_key "$PRIMARY_MODEL"; then
+	if [ -z "$GITHUB_API_KEY_FILE" ] || [ ! -f "$GITHUB_API_KEY_FILE" ] || [ -L "$GITHUB_API_KEY_FILE" ]; then
+		echo "ERROR: GITHUB_API_KEY_FILE must reference a regular file containing the GitHub Models token for model '$PRIMARY_MODEL'." >&2
+		exit 2
+	fi
+	GITHUB_API_KEY="$(trim_whitespace "$(cat -- "$GITHUB_API_KEY_FILE")")"
+	if [ -z "$GITHUB_API_KEY" ]; then
+		echo "ERROR: GITHUB_API_KEY_FILE must contain a non-empty GitHub Models token for model '$PRIMARY_MODEL'." >&2
 		exit 2
 	fi
 fi
@@ -1860,6 +1874,7 @@ run_strix_once() {
 	set +e
 	STRIX_CHILD_MODEL="$model" \
 		STRIX_CHILD_LLM_API_KEY="$LLM_API_KEY" \
+		STRIX_CHILD_GITHUB_API_KEY="$GITHUB_API_KEY" \
 		STRIX_CHILD_LLM_API_BASE="$llm_api_base_value" \
 		STRIX_CHILD_REPORTS_DIR="$ACTIVE_REPORTS_DIR" \
 		STRIX_CHILD_REASONING_EFFORT="$STRIX_REASONING_EFFORT" \
@@ -1905,6 +1920,9 @@ child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
 llm_api_key = os.environ.get("STRIX_CHILD_LLM_API_KEY")
 if llm_api_key:
     child_env["LLM_API_KEY"] = llm_api_key
+github_api_key = os.environ.get("STRIX_CHILD_GITHUB_API_KEY")
+if github_api_key:
+    child_env["GITHUB_API_KEY"] = github_api_key
 child_env["STRIX_REPORTS_DIR"] = os.environ["STRIX_CHILD_REPORTS_DIR"]
 # Forward strix runtime tunables that the workflow `env:` block sets but
 # which would otherwise be stripped by this allowlist-based child_env

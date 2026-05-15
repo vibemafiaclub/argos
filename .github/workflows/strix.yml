@@ -8,8 +8,11 @@ on:
     # The job itself, however, defers the expensive LLM-driven scan until the
     # `Decide post-approval run` step decides the PR is ready (approved /
     # `run-strix` label / auto-merge enabled). `labeled` is included so adding
-    # the `run-strix` label triggers a re-run that actually executes the scan.
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # the `run-strix` label triggers a re-run that actually executes the scan;
+    # `auto_merge_enabled` covers the common cost-saving path where earlier PR
+    # runs deferred before the expensive self-test / LLM scan and auto-merge is
+    # enabled only after required checks turn green.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, auto_merge_enabled]
   pull_request_review:
     # Re-trigger Strix when a reviewer submits an approval so the heavy scan
     # only runs once the PR has actually been approved on its current head.
@@ -48,6 +51,10 @@ permissions:
   actions: read
   checks: read
   contents: read
+  # Required when STRIX_LLM uses the LiteLLM `github/*` provider backed by
+  # GitHub Models. The token is only forwarded to Strix as GITHUB_API_KEY for
+  # that provider family.
+  models: read
   # Read-only access to PR review/label/auto-merge metadata is required so
   # `Decide post-approval run` can ask the GitHub API whether the heavy LLM
   # scan should actually execute on this run.
@@ -92,9 +99,6 @@ jobs:
               exit 1
             fi
           fi
-
-      - name: Self-test Strix gate script
-        run: bash ./scripts/ci/test_strix_quick_gate.sh
 
       - name: Gate Strix model secret
         id: gate
@@ -561,6 +565,10 @@ jobs:
             echo '- Policy: workflow_run executes trusted default-branch scripts and scans completed-run code as data.'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Self-test Strix gate script
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
+        run: bash ./scripts/ci/test_strix_quick_gate.sh
+
       - name: Set up Python
         if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -587,7 +595,7 @@ jobs:
           DEFAULT_PROVIDER=""
           raw="$(printf '%s' "$STRIX_LLM" | tr -d '\r\n')"
           if ! normalized="$(normalize_model "$raw" 2>&1)"; then
-            echo "::error::Invalid STRIX_LLM provider/model identifier. Use a provider-qualified value such as 'vertex_ai/<model>', 'gemini/<model>', 'openai/<model>', or 'anthropic/<model>'."
+            echo "::error::Invalid STRIX_LLM provider/model identifier. Use a provider-qualified value such as 'vertex_ai/<model>', 'github/<model>', 'gemini/<model>', 'openai/<model>', or 'anthropic/<model>'."
             exit 1
           fi
           provider=""
@@ -595,19 +603,30 @@ jobs:
             */*) provider="${normalized%%/*}" ;;
           esac
           if [ -z "$provider" ]; then
-            echo "::error::STRIX_LLM must be provider-qualified (e.g. 'vertex_ai/<model>', 'gemini/<model>', 'openai/<model>', 'anthropic/<model>')."
+            echo "::error::STRIX_LLM must be provider-qualified (e.g. 'vertex_ai/<model>', 'github/<model>', 'gemini/<model>', 'openai/<model>', 'anthropic/<model>')."
             exit 1
           fi
           {
             echo "provider=$provider"
-            if is_vertex_model "$normalized"; then
+            if model_requires_gcp_credentials "$normalized"; then
               echo 'is_vertex=true'
               echo 'needs_gcp_credentials=true'
+              echo 'needs_github_api_key=false'
+              echo 'needs_llm_api_key=false'
+            elif model_requires_github_api_key "$normalized"; then
+              echo 'is_vertex=false'
+              echo 'needs_gcp_credentials=false'
+              echo 'needs_github_api_key=true'
               echo 'needs_llm_api_key=false'
             else
               echo 'is_vertex=false'
               echo 'needs_gcp_credentials=false'
-              echo 'needs_llm_api_key=true'
+              echo 'needs_github_api_key=false'
+              if model_requires_llm_api_key "$normalized"; then
+                echo 'needs_llm_api_key=true'
+              else
+                echo 'needs_llm_api_key=false'
+              fi
             fi
           } >> "$GITHUB_OUTPUT"
           echo "Detected Strix LLM provider: $provider"
@@ -695,8 +714,30 @@ jobs:
           echo 'ready=false' >> "$GITHUB_OUTPUT"
           echo 'reason=missing-gcp-sa-key' >> "$GITHUB_OUTPUT"
 
+      - name: Gate GitHub Models token
+        id: github_models_gate
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_github_api_key == 'true'
+        env:
+          GITHUB_MODELS_TOKEN: ${{ github.token }}
+        run: |
+          trimmed_github_token="$(printf '%s' "$GITHUB_MODELS_TOKEN" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$trimmed_github_token" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo '### Strix quick scan'
+            echo
+            echo '- Outcome: fail-closed before scanner execution'
+            echo "- Reason: provider \`github\` requires the workflow GitHub token for GitHub Models, but it was not available"
+            echo "- Policy: GitHub Models scans use the repository \`GITHUB_TOKEN\` with \`models: read\`; missing token means the scan cannot authenticate."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo '::error::GitHub Models token is not available for github/* Strix provider; failing closed.'
+          exit 1
+
       - name: Install Strix
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_github_api_key != 'true' || steps.github_models_gate.outputs.ready == 'true')
         run: |
           python -m pip install --no-cache-dir --no-deps --require-hashes -r requirements-strix-ci.txt
 
@@ -770,7 +811,7 @@ jobs:
           fi
 
       - name: Prepare Strix model input file
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_github_api_key != 'true' || steps.github_models_gate.outputs.ready == 'true')
         env:
           STRIX_LLM_SECRET: ${{ secrets.STRIX_LLM }}
         run: |
@@ -782,7 +823,7 @@ jobs:
           fi
 
       - name: Prepare LLM API base input file
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_github_api_key != 'true' || steps.github_models_gate.outputs.ready == 'true')
         env:
           LLM_API_BASE_SECRET: ${{ secrets.LLM_API_BASE }}
         run: |
@@ -793,9 +834,21 @@ jobs:
             echo "LLM_API_BASE_FILE=$llm_api_base_file" >> "$GITHUB_ENV"
           fi
 
+      - name: Prepare GitHub Models token input file
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && steps.provider.outputs.needs_github_api_key == 'true' && steps.github_models_gate.outputs.ready == 'true'
+        env:
+          GITHUB_MODELS_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$GITHUB_MODELS_TOKEN" ]; then
+            umask 077
+            github_api_key_file="$RUNNER_TEMP/github_api_key.txt"
+            printf '%s' "$GITHUB_MODELS_TOKEN" > "$github_api_key_file"
+            echo "GITHUB_API_KEY_FILE=$github_api_key_file" >> "$GITHUB_ENV"
+          fi
+
       - name: Run Strix (quick)
         id: strix_quick
-        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true')
+        if: steps.gate.outputs.enabled == 'true' && steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true' && (steps.provider.outputs.needs_llm_api_key != 'true' || steps.llm_api_key_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_gcp_credentials != 'true' || steps.gcp_gate.outputs.ready == 'true') && (steps.provider.outputs.needs_github_api_key != 'true' || steps.github_models_gate.outputs.ready == 'true')
         continue-on-error: ${{ steps.decide.outputs.is_pr_associated == 'true' }}
         env:
           STRIX_LLM_FILE: ${{ env.STRIX_LLM_FILE }}
@@ -811,6 +864,7 @@ jobs:
           VERTEX_LOCATION: ${{ steps.provider.outputs.is_vertex == 'true' && 'global' || '' }}
           GEMINI_LOCATION: global
           LLM_API_KEY_FILE: ${{ env.LLM_API_KEY_FILE }}
+          GITHUB_API_KEY_FILE: ${{ env.GITHUB_API_KEY_FILE }}
           LLM_API_BASE_FILE: ${{ env.LLM_API_BASE_FILE }}
           # Default Vertex fallback list — only honored when the primary
           # is itself a Vertex model.  Gemini primaries get a same-provider

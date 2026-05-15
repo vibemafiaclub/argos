@@ -79,6 +79,18 @@ assert_workflow_strix_policy_static_guards() {
 		"workflow must report missing Vertex credentials explicitly"
 	assert_file_contains "$workflow_file" 'requires \`LLM_API_KEY\`, but the secret is not configured' \
 		"workflow must report missing API-key provider credentials explicitly"
+	assert_file_contains "$workflow_file" "models: read" \
+		"workflow must grant read access to GitHub Models for github/* Strix providers"
+	assert_file_contains "$workflow_file" "needs_github_api_key=true" \
+		"workflow must emit GitHub Models credential requirements separately"
+	assert_file_contains "$workflow_file" "GITHUB_API_KEY_FILE" \
+		"workflow must provide GitHub Models token through a dedicated input file"
+	assert_file_contains "$workflow_file" "Self-test Strix gate script" \
+		"workflow must retain the Strix gate self-test step"
+	assert_file_contains "$workflow_file" "steps.decide.outputs.should_scan == 'true' && steps.prepare_workflow_run_target.outputs.deferred != 'true'" \
+		"workflow must defer expensive self-tests until a heavy scan will run"
+	assert_file_contains "$workflow_file" "auto_merge_enabled" \
+		"workflow must re-run Strix when auto-merge is enabled after a deferred run"
 }
 
 assert_osv_workflow_static_guards() {
@@ -2145,6 +2157,70 @@ EOF
 	assert_file_contains "$env_log" "STRIX_PARENT_ONLY_SECRET=<unset>" "global region child env ($provider) does not leak parent-only secrets"
 	assert_file_not_contains "$env_log" "dummy-secret-value" "global region child env ($provider) masks api key value in assertions"
 	assert_file_not_contains "$env_log" "must-not-leak" "global region child env ($provider) blocks unrelated secret value"
+
+	rm -rf "$tmp_dir"
+}
+
+run_github_models_child_env_case() {
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local workspace_dir="$tmp_dir/workspace"
+	local repo_root_dir="$workspace_dir/smart-crawling-server"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local env_log="$tmp_dir/child-env.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local github_api_key_file="$tmp_dir/github_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+{
+	printf 'STRIX_LLM=%s\n' "${STRIX_LLM:-<unset>}"
+	printf 'LLM_API_KEY=%s\n' "${LLM_API_KEY:+<present>}"
+	printf 'GITHUB_API_KEY=%s\n' "${GITHUB_API_KEY:+<present>}"
+	printf 'STRIX_PARENT_ONLY_SECRET=%s\n' "${STRIX_PARENT_ONLY_SECRET:-<unset>}"
+} >"${FAKE_STRIX_ENV_LOG:?}"
+echo "scan ok"
+exit 0
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'github/gpt-4o' >"$strix_llm_file"
+	printf '%s' 'github-token-value' >"$github_api_key_file"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH -u STRIX_TEST_CHANGED_FILES_OVERRIDE \
+			PATH="$bin_dir:$PATH" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_ENV_LOG="$env_log" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			GITHUB_API_KEY_FILE="$github_api_key_file" \
+			STRIX_PROCESS_TIMEOUT_SECONDS="1200" \
+			STRIX_LLM_FALLBACK_MODELS="" \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			STRIX_TARGET_PATH="." \
+			STRIX_PARENT_ONLY_SECRET="must-not-leak" \
+			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "github models child env exit code"
+	assert_file_contains "$output_log" "scan ok" "github models child env output"
+	assert_file_contains "$env_log" "STRIX_LLM=github/gpt-4o" "github models child env model"
+	assert_file_contains "$env_log" "LLM_API_KEY=" "github models must not use generic LLM_API_KEY"
+	assert_file_contains "$env_log" "GITHUB_API_KEY=<present>" "github models child env token forwarding state"
+	assert_file_contains "$env_log" "STRIX_PARENT_ONLY_SECRET=<unset>" "github models child env blocks unrelated secrets"
+	assert_file_not_contains "$env_log" "github-token-value" "github models child env masks token value in assertions"
+	assert_file_not_contains "$env_log" "must-not-leak" "github models child env blocks unrelated secret value"
 
 	rm -rf "$tmp_dir"
 }
@@ -5083,6 +5159,7 @@ run_global_region_child_env_case "vertex_ai_beta" "gemini-2.5-pro" "global" "glo
 run_global_region_child_env_case "openai" "gpt-5" "global" "global" "global" "<present>" ""
 run_global_region_child_env_case "anthropic" "claude-sonnet-4" "global" "global" "global" "<present>" ""
 run_global_region_child_env_case "gemini" "gemini-2.5-pro" "global" "global" "global" "<present>" ""
+run_github_models_child_env_case
 
 if [ "$FAILURES" -ne 0 ]; then
 	echo "test_strix_quick_gate: ${FAILURES} failure(s)" >&2

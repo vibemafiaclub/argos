@@ -59,7 +59,7 @@ is_provider_qualified_model() {
 		return 1
 	fi
 	case "$provider" in
-	vertex_ai | vertex_ai_beta | openai | anthropic | azure | gemini | bedrock | groq | mistral | cohere | ollama | huggingface | xai)
+	vertex_ai | vertex_ai_beta | openai | anthropic | azure | gemini | github | bedrock | groq | mistral | cohere | ollama | huggingface | xai)
 		validate_model_identifier "$model" >/dev/null
 		return $?
 		;;
@@ -102,13 +102,19 @@ model_requires_llm_api_key() {
 	local provider
 	provider="$(extract_model_provider "$1")" || return 0
 	case "$provider" in
-	vertex_ai | vertex_ai_beta | ollama)
+	vertex_ai | vertex_ai_beta | github | ollama)
 		return 1
 		;;
 	*)
 		return 0
 		;;
 	esac
+}
+
+model_requires_github_api_key() {
+	local provider
+	provider="$(extract_model_provider "$1")" || return 1
+	[ "$provider" = "github" ]
 }
 
 is_vertex_resource_path() {
