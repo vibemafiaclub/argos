@@ -584,3 +584,70 @@ self-heal 발생 시 사용자 알림은 별도로 띄우지 않는다. `.argos/
 ### 참고
 - docs/tasks/2026-05-14-project-transfer-org/03-plan.md §Decision-1.1
 - ADR-005, ADR-007
+
+---
+
+## ADR-023: Session transcript 의 skill/subagent 강조색은 `bg-chart-4` 단일 토큰으로 통일
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `area:web`, `area:design-system`, `library:tailwindcss`, `task:2026-05-14-yellow-skill-bars`
+
+### 컨텍스트
+Session transcript 화면은 세 가지 컴포넌트(`session-activity-ribbon`, `event-list`, `event-detail`) 가 동일한 이벤트 데이터를 서로 다른 형태로 시각화한다. `event-list` (line 137-138) 와 `event-detail` (line 83-84) 은 `isSkillCall || isAgentCall` 인 tool 이벤트에 대해 이미 `bg-chart-4` (앰버) 강조를 사용 중이었으나, `ribbon` 의 `segmentVisuals` 만 모든 tool 이벤트를 `bg-muted-foreground` (회색) 로 렌더해 같은 분류가 화면 간 다른 색으로 보이는 비일관성이 있었다. 사용자가 "노란색으로 칠하자" 라고 요청한 시점에 새 디자인 토큰(`bg-warning`, yellow-400 등) 도입 여부가 잠재 분기였다.
+
+### 결정
+Skill / subagent 호출 이벤트(`event.kind === 'tool' && (event.isSkillCall || event.isAgentCall)`) 의 강조색은 transcript 의 세 컴포넌트 모두에서 기존 `bg-chart-4` 토큰을 그대로 재사용한다. 신규 토큰을 도입하지 않으며 skill 과 subagent 를 서로 다른 색으로 분리하지 않는다.
+
+### 근거
+- 동일 의미(강조되는 도구 호출 분류) 에는 동일 토큰을 쓴다는 디자인 시스템 원칙. event-list/event-detail 이 이미 채택한 규칙을 ribbon 이 따라가는 형태로 일관성 회복.
+- `--chart-4` 는 light/dark 양쪽 OKLCH 매핑이 이미 정의되어 있고 (`globals.css` line 46, 104, 156), 두 컴포넌트에서 가독성·다크모드 동작이 사실상 검증된 상태.
+- 신규 토큰 도입은 동일 의미에 두 토큰이 공존하는 디자인 시스템 분기를 만들고, 향후 강조 의미 변경 시 갱신 지점이 분산된다.
+
+### 트레이드오프
+- Skill 과 subagent 를 시각적으로 분리할 여지를 포기한다 (둘 모두 같은 앰버).
+- "전용 강조 토큰" (예: `bg-warning`) 으로 의미를 더 명시적으로 분리해 두지 않아, 향후 다른 강조 분류가 추가되면 `chart-4` 의 의미 과부하 가능성이 있다.
+
+### 대안
+- **신규 `bg-warning` / yellow-400 토큰 도입**: 동일 의미에 두 토큰을 가지는 디자인 시스템 분기 발생. clarify 가 비범위로 못박음.
+- **Skill 과 subagent 를 서로 다른 색으로 분리**: 사용자가 "둘 다 같은 노랑" 으로 명시. 분리는 신규 디자인 의사결정을 요구.
+
+### 참고
+- docs/tasks/2026-05-14-yellow-skill-bars/03-plan.md §Decision-1
+- 사용자 발언 인용: "이 task 는 신규 디자인 결정 없음 — event-list/event-detail 이 이미 쓰는 토큰을 ribbon 에도 동일 적용하는 일관성 패치"
+
+---
+
+## ADR-024: Web 컴포넌트의 순수 시각 helper 는 컴포넌트 인접 `.ts` 파일로 추출해 vitest 단위 테스트한다
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `area:web`, `language:typescript`, `tooling:vitest`, `task:2026-05-14-yellow-skill-bars`
+
+### 컨텍스트
+`packages/web` 의 vitest 설정(`vitest.config.ts`) 은 `defineConfig({ test: { environment: 'node', include: ['src/**/*.test.ts'] } })` 만 가지며, `vite-tsconfig-paths` 등 path alias(`@/*`) 해석 플러그인이 없다. 또한 React 컴포넌트 모듈(`.tsx`) 은 `'use client'` directive 와 top-level `react` 훅 import 를 갖는다. 그 상태에서 컴포넌트 내부의 순수 함수(예: `segmentVisuals` 같은 Tailwind 클래스 결정 helper) 를 단위 테스트하려면 export 만 추가하는 방식은 (1) alias 미해결로 resolve 실패하거나 (2) Node env 에서 컴포넌트 모듈 top-level 의 react 의존 평가를 끌어오는 위험을 만든다.
+
+### 결정
+컴포넌트의 시각 표현 결정 helper 는 컴포넌트 `.tsx` 와 같은 폴더에 별도 `.ts` 파일로 추출하고 (예: `session-ribbon-visuals.ts`), 같은 폴더 상대경로 named import 로 소비한다. 테스트는 동일 폴더의 `.test.ts` 로 작성하며, type 외 런타임 import 는 helper 자체 외에는 두지 않는다 (`import type` 만 사용). helper 는 `packages/web/src/lib/` 같은 도메인 lib 폴더에 두지 않는다.
+
+### 근거
+- vitest config 변경 0, 신규 의존 0. `src/**/*.test.ts` include 패턴이 `components/<area>/` 하위도 자동 수집한다.
+- `import type` 만 사용하면 TypeScript 가 JS emit 단계에서 제거하며, 값으로 오용하면 `isolatedModules: true` 하에서 컴파일 에러로 즉시 드러난다. 결과적으로 vitest 실행이 react 를 끌어오지 않는다.
+- helper 파일을 컴포넌트 인접 폴더에 두면 "이 helper 는 이 컴포넌트 전용" 이라는 소유권이 파일 위치로 표현된다. lib/ 로 옮기면 다른 컴포넌트가 재사용하면서 시각 결합도가 lib 전반으로 퍼질 위험이 있다.
+- 사용 경계는 `rg "<helper-module-name>" packages/web/src` substring 검색으로 자동 가드 가능.
+
+### 트레이드오프
+- 컴포넌트 한 개당 파일 수가 1~2개 증가한다 (helper + test).
+- 시각적 응집도(컴포넌트와 helper 가 같은 파일에 있던 상태) 가 약간 분산된다. 동일 폴더 거주로 완화.
+- 향후 react-testing-library 기반 DOM 단언 테스트가 필요해지면 별도 vitest config 확장(jsdom, alias 플러그인) 이 필요 — 본 결정은 그 경로를 막지 않으나 별도 의사결정.
+
+### 대안
+- **`.tsx` 에서 helper 만 `export` 추가**: alias 미해결 + 컴포넌트 top-level react import 평가 위험. 자연스러운 후속은 `vite-tsconfig-paths` 추가인데 본 task 의 surface 와 위험 외연을 넓힘.
+- **`vite-tsconfig-paths` 플러그인 추가**: 신규 dev 의존 + config 변경 + 컴포넌트 모듈 평가 위험 미해결.
+- **helper 를 `packages/web/src/lib/` 에 배치**: ribbon 전용 Tailwind/style 결정이 도메인 lib 처럼 보이고, 재사용 과정에서 시각 결합도가 lib 전반으로 퍼질 위험. helper 소유권은 컴포넌트에 머물러야 함.
+- **react-testing-library 렌더 후 DOM 단언**: jsdom + @testing-library/react 의존 + vitest config 환경 전환 필요. 본 task 비범위.
+
+### 참고
+- docs/tasks/2026-05-14-yellow-skill-bars/03-plan.md §Decision-3, §Decision-4, §Decision-6
+- packages/web/src/components/dashboard/session-ribbon-visuals.ts (적용 예)
+- packages/web/vitest.config.ts (alias 부재 / `src/**/*.test.ts` include 패턴 단일 원천)

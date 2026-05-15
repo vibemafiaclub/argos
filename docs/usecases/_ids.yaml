@@ -12,7 +12,7 @@
 next_id:
   ORG: 1
   PROJ: 2
-  SESS: 1
+  SESS: 2
   CLI: 2
   BILL: 1
   AUTH: 1
@@ -35,6 +35,16 @@ usecases:
     level: user-goal
     scope: 웹 대시보드 + 백엔드 API
     primary_actor: 출발·대상 org 양쪽 OWNER 사용자
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-14
+  UC-SESS-001:
+    file: docs/usecases/session/UC-SESS-001-ribbon-highlight-skill-subagent.md
+    name: Transcript ribbon 에서 skill / subagent 호출 구간을 한눈에 식별한다
+    level: user-goal
+    scope: Argos 웹 대시보드 Session Transcript 화면 (session-activity-ribbon + event-list + event-detail)
+    primary_actor: 세션 transcript 를 들여다보는 프로젝트 OWNER 또는 MEMBER
     status: active
     includes: []
     coverage_status: pending
