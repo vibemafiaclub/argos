@@ -74,4 +74,4 @@ last_reviewed: 2026-05-14
 - `packages/web/src/components/dashboard/session-ribbon-visuals.test.ts` — `segmentVisuals` 의 7 케이스 단위 테스트 (skill / subagent / 일반 tool / HUMAN / ASSISTANT / ASSISTANT outputTokens=0 / 방어적 둘 다 true).
 - `packages/web/src/components/dashboard/event-list.tsx` (line 137-138), `packages/web/src/components/dashboard/event-detail.tsx` (line 83-84) — 동일 분류·동일 `bg-chart-4` 강조 사용처. 시각 일관성의 기준점.
 - `packages/web/src/lib/timeline-events.ts` — `isSkillCall` / `isAgentCall` 플래그 정의, `buildTimelineGroups` 의 skill/subagent 머지 제외 분기.
-- ADR-013 (`bg-chart-4` 단일 토큰), ADR-014 (컴포넌트 인접 `.ts` helper + `import type`) — `docs/adr.md`.
+- ADR-023 (`bg-chart-4` 단일 토큰), ADR-024 (컴포넌트 인접 `.ts` helper + `import type`) — `docs/adr.md`.

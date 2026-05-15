@@ -48,7 +48,7 @@ Plan 확정. ADR background 띄우고 곧장 사용자 확인.
 ---
 ## USER · 2026-05-14T22:07:16
 
-/review. 추가로 docs/adr.md 의 task:2026-05-14-yellow-skill-bars 태그가 붙은 신규 ADR 들(ADR-013, ADR-014)과의 일관성도 점검해줘. 결과 텍스트만 출력해줘 (마크다운).
+/review. 추가로 docs/adr.md 의 task:2026-05-14-yellow-skill-bars 태그가 붙은 신규 ADR 들(ADR-023, ADR-024)과의 일관성도 점검해줘. 결과 텍스트만 출력해줘 (마크다운).
 
 ## ASSISTANT · 2026-05-14T22:12:49
 
@@ -61,7 +61,7 @@ Plan 확정. ADR background 띄우고 곧장 사용자 확인.
 - `timeline-events.test.ts` — isSkillCall 이벤트가 toolRun 머지에 포함되지 않음을 검증하는 회귀 케이스 1개 추가
 - 전체 스위트 67 tests passed
 
-**ADR background 알림 도착** — ADR-013, ADR-014 두 건이 `docs/adr.md` 에 append 완료.
+**ADR background 알림 도착** — ADR-023, ADR-024 두 건이 `docs/adr.md` 에 append 완료.
 
 다음 단계(Evaluate: review + QA)로 진행할까요?
 

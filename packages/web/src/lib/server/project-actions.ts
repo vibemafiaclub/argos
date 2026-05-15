@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { Prisma } from '@prisma/client'
 import { db } from './db'
 
 export interface ProjectListItem {
@@ -208,5 +209,142 @@ export async function updateProjectForUser(
   return {
     kind: 'ok',
     project: updated,
+  }
+}
+
+export type TransferProjectForUserResult =
+  | { kind: 'ok'; project: ProjectDetail & { orgSlug: string } }
+  | { kind: 'not_found' }
+  | { kind: 'forbidden' }
+  | { kind: 'slug_conflict' }
+  | { kind: 'same_org'; project: ProjectDetail & { orgSlug: string } }
+
+export async function transferProjectForUser(
+  projectId: string,
+  userId: string,
+  input: { targetOrgSlug: string }
+): Promise<TransferProjectForUserResult> {
+  const { targetOrgSlug } = input
+
+  // 1. 출발 project + org membership 조회
+  const project = await db.project.findUnique({
+    where: { id: projectId },
+    select: {
+      id: true,
+      orgId: true,
+      name: true,
+      slug: true,
+      createdAt: true,
+      organization: {
+        select: {
+          id: true,
+          slug: true,
+          memberships: {
+            where: { userId },
+            select: { role: true },
+            take: 1,
+          },
+        },
+      },
+    },
+  })
+
+  if (!project) {
+    return { kind: 'not_found' }
+  }
+
+  const sourceMembership = project.organization.memberships[0]
+  if (sourceMembership?.role !== 'OWNER') {
+    return { kind: 'forbidden' }
+  }
+
+  // 2. 대상 org 조회
+  const targetOrg = await db.organization.findUnique({
+    where: { slug: targetOrgSlug },
+    select: {
+      id: true,
+      slug: true,
+      memberships: {
+        where: { userId },
+        select: { role: true },
+        take: 1,
+      },
+    },
+  })
+
+  if (!targetOrg) {
+    return { kind: 'not_found' }
+  }
+
+  const targetMembership = targetOrg.memberships[0]
+  if (targetMembership?.role !== 'OWNER') {
+    return { kind: 'forbidden' }
+  }
+
+  // 3. same_org 조기 반환 (트랜잭션 skip, ProjectMember 보존)
+  if (project.orgId === targetOrg.id) {
+    return {
+      kind: 'same_org',
+      project: {
+        id: project.id,
+        orgId: project.orgId,
+        name: project.name,
+        slug: project.slug,
+        createdAt: project.createdAt,
+        orgSlug: project.organization.slug,
+      },
+    }
+  }
+
+  // 4. 트랜잭션: 내부 권한 재검증 + ProjectMember 삭제 + Project.orgId 갱신
+  const FORBIDDEN_RACE = Symbol('forbidden_race')
+  try {
+    const updated = await db.$transaction(async (tx) => {
+      const sourceM = await tx.orgMembership.findUnique({
+        where: { userId_orgId: { userId, orgId: project.orgId } },
+        select: { role: true },
+      })
+      const targetM = await tx.orgMembership.findUnique({
+        where: { userId_orgId: { userId, orgId: targetOrg.id } },
+        select: { role: true },
+      })
+      if (sourceM?.role !== 'OWNER' || targetM?.role !== 'OWNER') {
+        // race: 검증 후 강등됨 → forbidden 으로 매핑
+        const e = Object.assign(new Error('forbidden_race'), {
+          __forbiddenRace: FORBIDDEN_RACE,
+        })
+        throw e
+      }
+      await tx.projectMember.deleteMany({ where: { projectId } })
+      return tx.project.update({
+        where: { id: projectId },
+        data: { orgId: targetOrg.id },
+        select: { id: true, orgId: true, name: true, slug: true, createdAt: true },
+      })
+    })
+    return { kind: 'ok', project: { ...updated, orgSlug: targetOrg.slug } }
+  } catch (err: unknown) {
+    if (
+      err instanceof Error &&
+      (err as Error & { __forbiddenRace?: symbol }).__forbiddenRace ===
+        FORBIDDEN_RACE
+    )
+      return { kind: 'forbidden' }
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      const target = err.meta?.target as string[] | string | undefined
+      const targetStr = (
+        Array.isArray(target) ? target.join(',') : (target ?? '')
+      ).toLowerCase()
+      if (
+        (targetStr.includes('orgid') || targetStr.includes('org_id')) &&
+        targetStr.includes('slug')
+      ) {
+        return { kind: 'slug_conflict' }
+      }
+    }
+    throw err
   }
 }

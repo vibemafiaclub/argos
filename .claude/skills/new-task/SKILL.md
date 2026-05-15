@@ -144,10 +144,11 @@ ADR background 가 아직 안 끝났으면, 메인은 그냥 evaluate 두 개를
 
 1. **Code Review** (headless claude code):
    - Bash 로 `claude -p "/review"` 를 실행. 작업 디렉토리에서 실행되며, `/review` 가 변경분을 자동 인식.
-   - 출력을 `docs/tasks/<slug>/05-review.md` 에 저장. 명령 예:
+   - **반드시 절대 경로 + 절대 binary 로 실행**. `claude` 는 사용자 shell 의 alias 라 비대화형 Bash 에서는 동작하지 않는다. 또한 메인 세션의 cwd 가 이전 단계에서 `cd packages/<pkg>` 등으로 변경됐을 수 있으므로 출력 리다이렉트도 절대 경로로 적는다. 명령 예:
      ```bash
-     claude -p "/review. 추가로 docs/adr.md 의 task:<task_slug> 태그가 붙은 신규 ADR 들과 일관성도 점검해줘. 결과 텍스트만 출력해줘 (마크다운)." > docs/tasks/<task_slug>/05-review.md
+     /Users/<user>/.claude/local/claude -p "/review. 추가로 docs/adr.md 의 task:<task_slug> 태그가 붙은 신규 ADR 들과 일관성도 점검해줘. 결과 텍스트만 출력해줘 (마크다운)." > /Users/<user>/Desktop/dev/vmc/argos/docs/tasks/<task_slug>/05-review.md
      ```
+     `which claude` 로 실제 binary 경로를 한 번 확인해서 박는다 (alias 가 가리키는 실제 파일).
 2. **QA**: `Agent` tool `subagent_type="new-task-evaluate-qa"`. 입력: `task_slug`, `plan_path`, `clarify_path`.
 
 ### Evaluate 입력 컨텍스트 최적화
