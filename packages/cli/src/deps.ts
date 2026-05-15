@@ -1,6 +1,7 @@
 import type { Config } from './lib/config.js'
 import type { ProjectConfig } from './lib/project.js'
-import type { LoginResponse, ExchangeResponse, CreateProjectResponse, IngestEventPayload, UsagePayload, UsagePerTurnPayload, MessagePayload } from '@argos/shared'
+import type { SendEventBackgroundOpts } from './lib/event-sender.js'
+import type { LoginResponse, ExchangeResponse, CreateProjectResponse, UsagePayload, UsagePerTurnPayload, MessagePayload } from '@argos/shared'
 
 export interface ExternalDeps {
   config: {
@@ -10,6 +11,7 @@ export interface ExternalDeps {
   }
   project: {
     find(cwd?: string): ProjectConfig | null
+    findWithPath(cwd?: string): { config: ProjectConfig; configPath: string } | null
     write(config: ProjectConfig): void
   }
   auth: {
@@ -37,7 +39,7 @@ export interface ExternalDeps {
     extractSummary(path: string): Promise<string | null>
   }
   events: {
-    sendBackground(url: string, token: string, payload: IngestEventPayload): void
+    sendBackground(opts: SendEventBackgroundOpts): void
   }
   cwd(): string
 }

@@ -1,5 +1,5 @@
 ---
-id: UC-SESS-001
+id: UC-SESS-002
 name: skill 별 project 분포를 본다
 level: user-goal
 scope: 웹 대시보드 (`/dashboard/[orgSlug]/skills`) + 백엔드 API (`/api/orgs/[orgSlug]/dashboard/skills`)
@@ -81,13 +81,13 @@ last_reviewed: 2026-05-15
 
 ## 기술/데이터 변형
 
-- V1. Top 5 결정의 tiebreaker 는 `(invocations DESC, project_name ASC, project_id ASC)` 로 결정적이며 새로고침 후에도 순서가 변하지 않는다 (Decision-2 / ADR-024).
+- V1. Top 5 결정의 tiebreaker 는 `(invocations DESC, project_name ASC, project_id ASC)` 로 결정적이며 새로고침 후에도 순서가 변하지 않는다 (Decision-2 / ADR-026).
 - V2. `lastUsedAt` 은 SQL 측에서 `to_char(... AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` 로 ISO8601 UTC 문자열로 변환되어 응답에 실린다.
 
 ## 참고
 
 - `docs/data-schema.md` — `events.project_id`, `claude_sessions.project_id`, `projects.org_id` 컬럼 정의 (분포 산출의 원천).
-- `docs/adr.md` ADR-023 (window function Top-N), ADR-024 (정렬 tiebreaker 표준), ADR-025 (base-ui Popover, click/focus 기본 + hover 보강), ADR-026 (CSS truncate), ADR-027 (Top-N + `additional<X>Count` 서버 계산), ADR-028 (변경 전/후 10회 median 비교), ADR-029 (`json_agg(... ORDER BY ...) FILTER` + ISO8601 `to_char`).
+- `docs/adr.md` ADR-025 (window function Top-N), ADR-026 (정렬 tiebreaker 표준), ADR-027 (base-ui Popover, click/focus 기본 + hover 보강), ADR-028 (CSS truncate), ADR-029 (Top-N + `additional<X>Count` 서버 계산), ADR-030 (변경 전/후 10회 median 비교), ADR-031 (`json_agg(... ORDER BY ...) FILTER` + ISO8601 `to_char`).
 - `packages/web/src/app/api/orgs/[orgSlug]/dashboard/skills/route.ts` — `all_skill_calls` / `skill_project_aggregates` / `skill_project_ranked` / `skill_project_breakdown` CTE.
 - `packages/web/src/lib/server/dashboard-row-mapping.ts` — `parseProjectsJson` + `additionalProjectCount` 계산.
 - `packages/web/src/components/dashboard/skill-projects-cell.tsx` — 셀 UI + Popover 트리거.

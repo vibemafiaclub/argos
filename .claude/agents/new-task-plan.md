@@ -97,7 +97,7 @@ model: inherit
 codex CLI 는 별도 프로세스에서 plan 을 비평한다. 호출 예:
 
 ```bash
-codex exec --skip-git-repo-check --sandbox read-only "다음 plan 을 비평해줘. 입력 파일: docs/tasks/<slug>/01-clarify.md, docs/tasks/<slug>/02-context.md, docs/tasks/<slug>/03-plan.md. 결과를 docs/tasks/<slug>/03-plan-critique-<N>.md 에 저장. 비평 형식: 각 이슈에 severity(critical|major|minor) + 위치(plan 섹션) + 한 줄 설명 + 권고 수정. critical 이 없으면 그렇다고 명시. plan 의 work unit 분할, 병렬 그룹의 파일 충돌, Decision Log 의 근거 충분성, 검증 시나리오의 누락 여부에 특히 집중."
+codex exec --skip-git-repo-check --sandbox read-only "다음 plan 을 비평해줘. 입력 파일: docs/tasks/<slug>/01-clarify.md, docs/tasks/<slug>/02-context.md, docs/tasks/<slug>/03-plan.md. 결과를 docs/tasks/<slug>/03-plan-critique-<N>.md 에 저장. 비평 형식: 각 이슈에 severity(critical|major|minor) + 위치(plan 섹션) + 한 줄 설명 + 권고 수정. critical 이 없으면 그렇다고 명시. plan 의 work unit 분할, 병렬 그룹의 파일 충돌, Decision Log 의 근거 충분성, 검증 시나리오의 누락 여부, 그리고 동일 의미값(색·토큰·분류 술어 등)이 helper/JSX/CSS 등 여러 위치에 하드코딩돼 단일 출처가 깨지는지에 특히 집중."
 ```
 
 - 비평 파일이 만들어졌는지 `ls` 로 확인 후 Read.

@@ -1,7 +1,7 @@
 import { existsSync } from 'fs'
 import { input } from '@inquirer/prompts'
 import { readConfig, writeConfig, deleteConfig } from './lib/config.js'
-import { findProjectConfig, writeProjectConfig } from './lib/project.js'
+import { findProjectConfig, findProjectConfigWithPath, writeProjectConfig } from './lib/project.js'
 import { runLoginFlow } from './lib/auth-flow.js'
 import { apiRequest } from './lib/api-client.js'
 import { injectHooks } from './lib/hooks-inject.js'
@@ -18,6 +18,7 @@ export const realDeps: ExternalDeps = {
   },
   project: {
     find: findProjectConfig,
+    findWithPath: findProjectConfigWithPath,
     write: writeProjectConfig,
   },
   auth: {
@@ -111,7 +112,7 @@ export const realDeps: ExternalDeps = {
     extractSummary: extractSummary,
   },
   events: {
-    sendBackground: sendEventBackground,
+    sendBackground: (opts) => sendEventBackground(opts),
   },
   cwd(): string {
     return process.cwd()

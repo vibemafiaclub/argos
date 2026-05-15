@@ -80,7 +80,7 @@ export async function GET(
               AND e.skill_name = slash_match.match[1]
           )
       ),
-      -- all_skill_calls: union CTE 를 독립 CTE 로 승격 — skill_events 와 skill_project_aggregates 가 공유하므로 union 중복 실행 방지 (ADR-023)
+      -- all_skill_calls: union CTE 를 독립 CTE 로 승격 — skill_events 와 skill_project_aggregates 가 공유하므로 union 중복 실행 방지 (ADR-025)
       all_skill_calls AS (
         SELECT * FROM event_skill_calls
         UNION ALL
@@ -129,8 +129,8 @@ export async function GET(
         WHERE sc.project_id = ANY(${projectIds}::text[])
         GROUP BY sc.skill_name, sc.project_id, p.name
       ),
-      -- skill_project_ranked: ROW_NUMBER() window function 으로 skill 별 invocations Top 순위 매기기 (ADR-023)
-      --   tiebreaker: invocations DESC, project_name ASC, project_id ASC (ADR-024 결정적 정렬)
+      -- skill_project_ranked: ROW_NUMBER() window function 으로 skill 별 invocations Top 순위 매기기 (ADR-025)
+      --   tiebreaker: invocations DESC, project_name ASC, project_id ASC (ADR-026 결정적 정렬)
       skill_project_ranked AS (
         SELECT
           skill_name,
@@ -144,7 +144,7 @@ export async function GET(
           ) AS rn
         FROM skill_project_aggregates
       ),
-      -- skill_project_breakdown: Top 5 를 json_agg + FILTER 로 배열화, total_project_count 로 additionalProjectCount 계산 기반 제공 (ADR-029)
+      -- skill_project_breakdown: Top 5 를 json_agg + FILTER 로 배열화, total_project_count 로 additionalProjectCount 계산 기반 제공 (ADR-031)
       --   to_char(...AT TIME ZONE 'UTC', ...) 로 timestamptz → ISO8601 UTC 문자열 변환 (mapper 에서 Date 가정 제거)
       --   COALESCE('[]'::json) 로 skill 에 project 0개일 때도 non-null 보장
       skill_project_breakdown AS (
