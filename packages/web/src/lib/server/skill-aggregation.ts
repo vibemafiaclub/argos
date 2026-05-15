@@ -36,6 +36,7 @@ import { db } from './db'
  * - skill_name TEXT
  * - session_id TEXT
  * - user_id TEXT
+ * - project_id TEXT
  * - timestamp TIMESTAMPTZ
  * - source TEXT  ('event' | 'message_slash')
  *
@@ -53,6 +54,7 @@ export function skillCallRowsRelation(
       skill_name,
       session_id,
       user_id,
+      project_id,
       timestamp,
       'event'::text AS source
     FROM events
@@ -68,6 +70,7 @@ export function skillCallRowsRelation(
       slash_match.match[1] AS skill_name,
       m.session_id,
       s.user_id,
+      s.project_id,
       m.timestamp,
       'message_slash'::text AS source
     FROM messages m
