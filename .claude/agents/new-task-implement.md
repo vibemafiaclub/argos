@@ -26,6 +26,7 @@ model: sonnet
 2. 관련 ADR 들 Read (`docs/adr.md` 에서 grep). 결정 사항과 일관성 있게 구현.
 3. 자기 wu 의 수정/생성 파일들 작업.
 4. 검증 명령 실행 (`pnpm test ...`, `pnpm build`, 타입체크 등 plan 에 명시된 것). 실패하면 디버깅 후 재시도.
+   - **자기 영역 종료 전에 자기 패키지의 typecheck 를 반드시 self-check 한다**. vitest 는 ts-loader 가 관대해서 통과시켜도 `tsc --noEmit` 은 깨지는 케이스가 잦다 (대표적으로 `db.$transaction` 같은 Prisma 오버로드 mock, 복잡한 generic, `as` cast 누락). 명령 예: `pnpm --filter <pkg> typecheck` (또는 그 패키지 root 에서 `pnpm exec tsc --noEmit`). typecheck 가 깨지면 followup 라운드 비용이 크므로 반드시 자기 영역에서 막는다.
 5. `docs/tasks/<slug>/04-implement-<wu_id>.md` 작성:
    ```markdown
    # Implement — <wu_id>
@@ -43,6 +44,9 @@ model: sonnet
 
    ## 잠재 이슈 / 후속 메모
    - <있으면. 없으면 "없음">
+
+   ## Pre-existing 실패 (있을 때만)
+   - 본 WU 가 도입하지 않은 검증 실패(타입체크/빌드/테스트)는 여기에 분리 기록. 원인 추정 1줄 + 본 WU 와 무관함을 명시. 분리 보고가 어려우면 "검증 실패한 채 완료" 로 간주하고 디버깅 후 재시도.
    ```
 6. 메인에 반환: 파일 경로 + 3~5줄 요약.
 
