@@ -651,3 +651,235 @@ Skill / subagent 호출 이벤트(`event.kind === 'tool' && (event.isSkillCall |
 - docs/tasks/2026-05-14-yellow-skill-bars/03-plan.md §Decision-3, §Decision-4, §Decision-6
 - packages/web/src/components/dashboard/session-ribbon-visuals.ts (적용 예)
 - packages/web/vitest.config.ts (alias 부재 / `src/**/*.test.ts` include 패턴 단일 원천)
+---
+
+## ADR-025: Dashboard CTE 의 Top-N partition 산출은 window function (`ROW_NUMBER() OVER (PARTITION BY ...)`) 채택
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `language:sql`, `db:postgres`, `area:api`, `pattern:cte-topn`, `task:2026-05-14-skills-project-breakdown`
+
+### 컨텍스트
+Argos 의 dashboard 집계 라우트(`/api/orgs/[orgSlug]/dashboard/skills` 등) 는 union CTE 결과 위에 "그룹별 상위 N" (예: skill 별 invocations 상위 5 project) 을 산출해야 하는 경우가 늘고 있다. 동일 base CTE 를 다시 group by 한 뒤 partition 단위 Top-N 을 잘라야 한다. Postgres 환경(PG14+) 에서 (A) `ROW_NUMBER() OVER (PARTITION BY group_key ORDER BY metric DESC)` window function 으로 자르는 방식과 (B) `LATERAL` join 방식을 비교했다.
+
+### 결정
+group-Top-N 산출은 window function `ROW_NUMBER() OVER (PARTITION BY <group_key> ORDER BY <metric DESC, tiebreakers>)` + `WHERE rn <= N` 방식을 표준으로 채택한다. LATERAL join 은 사용하지 않는다.
+
+### 근거
+- window function 은 same base CTE 위에 single plan node 만 추가되어 plan complexity 가 낮다.
+- LATERAL join 은 그룹 행 (예: skill 50 개) 마다 sub-plan 을 반복 실행한다 — IO/plan 비용 증가.
+- 기존 dashboard CTE 들의 단일 union → group by 스타일과 자연스럽게 합쳐진다.
+- PG14+ 안정 (이미 Supabase PG 환경 충족).
+
+### 트레이드오프
+- 동일 base CTE 가 더 길어진다 (`*_ranked` CTE 한 단계 추가). 가독성 비용은 작다.
+- Top-N 의 N 이 매우 크거나 partition 수가 폭증하면 sort 메모리 사용이 LATERAL 보다 클 수 있다 — 현재 규모(50×N) 에서 무시 가능.
+
+### 대안
+- **`LATERAL` join 으로 partition 별 sub-query LIMIT N**: skill 50회 sub-plan 반복, plan complexity↑. 거절.
+- **application 측에서 자르기 (DB→APP 전 분포 전송)**: 페이로드/전송량 증가. 거절.
+
+### 참고
+- docs/tasks/2026-05-14-skills-project-breakdown/03-plan.md §Decision-1
+- packages/web/src/app/api/orgs/[orgSlug]/dashboard/skills/route.ts (적용)
+
+---
+
+## ADR-026: Dashboard 정렬 tiebreaker 표준 = `(metric DESC, name ASC, id ASC)`
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `language:sql`, `area:api`, `concern:determinism`, `pattern:sort-tiebreaker`, `task:2026-05-14-skills-project-breakdown`
+
+### 컨텍스트
+Dashboard 의 Top-N 산출 (project 분포, agent 분포 등) 에서 metric 동률 발생 시 비결정적 정렬은 페이지 새로고침마다 순서가 흔들리는 UX 회귀를 일으킨다. 기존 CTE 들 일부는 단일 키 ORDER BY 만 쓰고 있어 tiebreaker 가 없다 (예: `ORDER BY e.call_count DESC`).
+
+### 결정
+Argos dashboard CTE 의 결정적 정렬 규칙: **`ORDER BY <metric> DESC, <human_readable_name> ASC, <id> ASC`** 의 3단 tiebreaker 를 표준으로 채택한다. 예: skill 별 project 분포 — `ORDER BY invocations DESC, project_name ASC, project_id ASC`.
+
+### 근거
+- 단일 키 ORDER BY 는 동률에서 PG 가 어떤 순서로든 반환할 수 있어 페이지 reload 마다 순서가 흔들린다 (UX 회귀).
+- name ASC 를 두 번째 키로 두면 사람 가독성 있는 순서 (CUID/UUID 보다 안정적).
+- id ASC 를 최종 키로 두면 동명이인(같은 name) 도 결정적 — 안정성 보장.
+
+### 트레이드오프
+- ORDER BY 키가 늘어 SQL 행이 약간 길어진다.
+- name 컬럼 없는 dimension 에는 적용 불가 (그 경우 id ASC 단일 tiebreaker 로 축소).
+
+### 대안
+- **`(metric DESC, id ASC)` 만**: id 가 CUID 라 사람 가독성 낮음 — 가까운 동률에서 UX 일관성 떨어짐. 거절.
+- **단일 키 ORDER BY (현 상태 유지)**: 비결정적 정렬 → reload 마다 순서 흔들림. 거절.
+
+### 참고
+- docs/tasks/2026-05-14-skills-project-breakdown/03-plan.md §Decision-2
+- clarify R2 (동률 tiebreaker 미정 위험)
+
+---
+
+## ADR-027: 호버 가능한 UI primitive 는 `@base-ui/react/popover` 를 쓰되 기본 트리거는 click/focus, hover 는 보강
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `library:base-ui`, `area:web`, `concern:a11y`, `pattern:popover-trigger`, `task:2026-05-14-skills-project-breakdown`
+
+### 컨텍스트
+Dashboard 셀에 "요약 + 상세 풀 분포" UI 패턴이 늘고 있다 (Projects 컬럼 등). 호버 단독 트리거는 모바일/터치/키보드 사용자를 배제한다. Argos 는 이미 `@base-ui/react` 를 채택 중이지만 base-ui 1.4 에는 HoverCard 가 없고 Popover 만 있다 (확인: `node_modules/@base-ui/react/popover/trigger/PopoverTrigger.js` 의 `openOnHover` prop).
+
+### 결정
+호버 가능한 상세 표시 컴포넌트는 `@base-ui/react/popover` 를 표준으로 사용한다. 트리거 정책:
+- **기본 트리거 = click/focus** (Tab + Enter/Space 키보드 작동).
+- **hover 는 보강** (`Popover.Trigger.openOnHover`) — 데스크탑 마우스 사용성.
+- Escape / Outside click 은 base-ui 기본 close 동작.
+- shadcn 스타일 래퍼는 `packages/web/src/components/ui/popover.tsx` 에 둔다 (info-tooltip 와 동일 톤).
+
+### 근거
+- 모바일/터치/키보드 사용자 a11y 확보 — hover-only 는 WCAG 2.1 1.4.13 위반 가능.
+- 별도 Radix HoverCard 도입 대비 신규 의존성 없음 (base-ui 재사용).
+- base-ui Popover 가 modal 비활성 모드(`modal={false}`) 지원 → 가벼운 inline tooltip-like UX.
+
+### 트레이드오프
+- click + hover 두 채널 모두 노출 → trigger 영역 DOM 이 약간 복잡 (nested interactive 회피 위해 sibling 구조 권장).
+- hover 만 쓰던 기존 UX 멘탈 모델과 살짝 다름 — info-tooltip 과 일관성을 위해 동일 톤 스타일 적용.
+
+### 대안
+- **Radix `HoverCard` 도입**: 신규 deps 증가. 거절.
+- **hover-only Tooltip**: 모바일/키보드 사용자 배제. 거절.
+
+### 참고
+- docs/tasks/2026-05-14-skills-project-breakdown/03-plan.md §Decision-3
+- packages/web/src/components/ui/popover.tsx (신규 primitive)
+- packages/web/src/components/ui/info-tooltip.tsx (스타일 톤 참조)
+
+---
+
+## ADR-028: Dashboard 셀 텍스트 cut-off 는 CSS truncate, JS substring 으로 자르지 않는다
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `area:web`, `concern:ux`, `pattern:text-truncation`, `task:2026-05-14-skills-project-breakdown`
+
+### 컨텍스트
+Dashboard 테이블 셀에 가변 길이 텍스트(project 이름들의 콤마 join 등) 가 들어가면서 좁은 viewport 에서 overflow 처리가 필요하다. 두 가지 접근이 있다: (a) CSS `max-w-* truncate` 로 시각 처리 (b) JS 측에서 substring + `...` 로 데이터 자체를 자른다.
+
+### 결정
+셀 텍스트는 **CSS truncate** (`max-w-[20rem] truncate` 등) 로 처리한다. JS 측에서 텍스트 데이터를 자르지 않는다. 전체 텍스트는 셀의 팝오버/상세 뷰에서 노출한다.
+
+### 근거
+- JS substring 은 같은 데이터를 두 방식(요약/원본)으로 표현해 일관성 위험 (예: aria-label vs visible text 불일치).
+- CSS truncate 는 DOM 에 full text 가 그대로 있어 스크린리더/검색 기능에 친화적.
+- 풀 텍스트가 팝오버에 있으면 사용자가 호버/클릭으로 항상 확인 가능 — 정보 손실 없음.
+
+### 트레이드오프
+- 좁은 viewport 에서 1~2 글자 잘림 발생 가능 (visible 측면). 팝오버로 보완.
+- CSS truncate 는 한 줄 ellipsis 만 지원 — 멀티라인 cut-off 가 필요하면 `line-clamp` 별도 처리.
+
+### 대안
+- **JS substring + `...`**: aria-label/검색 등에 full text 와 표시 text 가 갈라져 일관성 위험. 거절.
+
+### 참고
+- docs/tasks/2026-05-14-skills-project-breakdown/03-plan.md §Decision-4
+
+---
+
+## ADR-029: Dashboard API 응답에 Top-N "잔여 카운트" (`additionalXxxCount`) 를 서버에서 계산해 보낸다
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `area:api`, `concern:payload-size`, `pattern:topn-plus-count`, `task:2026-05-14-skills-project-breakdown`
+
+### 컨텍스트
+Dashboard 의 "Top N + (+M more)" UX 패턴은 풀 분포를 보내지 않고 Top N 만 보내면서도 사용자에게 "남은 항목 개수" 를 알려야 한다. 두 선택지: (a) 풀 분포(N+M 전체) 를 응답에 실어 클라이언트가 자른다 (b) 서버에서 Top N + `additionalXxxCount: number` 만 계산해 보낸다.
+
+### 결정
+Dashboard API 응답은 **Top N 배열 + `additional<Dimension>Count: number`** 모양으로 서버에서 미리 계산해 보낸다. 클라이언트는 카운트를 단순 표시만 한다. 예: `SkillStat.projects: Top5[]` + `additionalProjectCount: number`.
+
+### 근거
+- 풀 분포를 보내면 응답 페이로드가 (rows × dimension 평균 cardinality) 로 폭증 — 예: skill 50 × project 수십 = 수백~수천 entry.
+- 카운트는 SQL `count(distinct ...) - N` 한 줄로 산출 가능 — 추가 비용 미미.
+- 클라이언트가 분포 산출 로직을 갖지 않게 됨 → 권한 필터(서버) 와 표시 로직(클라이언트) 의 책임 경계 명확.
+
+### 트레이드오프
+- 사용자가 "Top N 외 항목들의 명세" 를 보려면 별도 drill-down 페이지가 필요 (본 task 비범위, 후속 task).
+- API 가 두 값(Top N 배열 + 잔여 카운트) 을 모두 산출해야 함 — SQL CTE 한 단계 추가.
+
+### 대안
+- **풀 분포를 응답에 포함**: 응답 페이로드 폭증 (R3 회귀). 거절.
+- **클라이언트가 카운트 계산**: 풀 분포가 클라이언트에 와야 가능 — 동일 페이로드 폭증. 거절.
+
+### 참고
+- docs/tasks/2026-05-14-skills-project-breakdown/03-plan.md §Decision-6, §Decision-9
+- clarify A1/G2 (응답 스키마 단일 진실)
+
+---
+
+## ADR-030: 성능 회귀 검증은 "변경 전/후 동일 호출 10회 median 비교" 로컬 측정 절차로 갈음
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `concern:performance`, `phase:evaluate`, `pattern:perf-regression-check`, `task:2026-05-14-skills-project-breakdown`
+
+### 컨텍스트
+Argos repository 에는 부하 테스트 인프라/저장된 P95 baseline 이 없다 (확인됨). API 응답 시간/페이로드 회귀를 막을 객관적 기준이 필요하지만 본격 perf 인프라 도입은 task 범위를 크게 벗어난다.
+
+### 결정
+Dashboard API 의 성능 회귀 검증은 다음 로컬 절차로 갈음한다:
+1. **변경 직전 커밋** 을 checkout 후 dev 서버 기동.
+2. 동일 endpoint 를 동일 쿼리 파라미터로 **연속 10회** 호출 (`curl -w "%{time_total}\n%{size_download}\n"`).
+3. 변경 후 커밋에서 같은 호출 10회 반복.
+4. **수용 기준**: (a) latency: `변경 후 median <= 변경 전 median * 1.20` (changed/baseline ≤ 1.2). (b) payload: Content-Length 절대 sanity bound (예: < 40KB).
+5. 두 지표 모두 evaluate 보고서에 수치 기록.
+
+데이터 부재 환경에서는 절대값 sanity check 만 적용 + "측정 데이터 부족" 명시.
+
+### 근거
+- 본격 부하 테스트 인프라 도입은 task 범위 초과.
+- 로컬 10회 median 은 단발성 노이즈를 흡수하고 회귀를 충분히 잡는 수준 (정확한 P95 는 아니지만 ±20% 임계 안에서 안전 가드).
+- payload 절대값 (Content-Length) 은 latency 보조 지표 — 페이로드 폭증 회귀를 명시 탐지.
+
+### 트레이드오프
+- median 은 P95 보다 덜 보수적 — 꼬리 분포 회귀를 못 잡을 수 있음.
+- 변경 전 커밋 checkout 이 필요 — 작업 흐름이 약간 끊김.
+- 데이터 부재 시 sanity bound 만 — 회귀 탐지력 약함 (한계 명시).
+
+### 대안
+- **부하 테스트 인프라 신규 도입**: task 범위 초과. 거절.
+- **측정 없이 정성 기준**: 회귀 발견 불가. 거절.
+
+### 참고
+- docs/tasks/2026-05-14-skills-project-breakdown/03-plan.md §Decision-8, S13
+
+---
+
+## ADR-031: SQL Top-N 배열 산출은 `json_agg(... ORDER BY ...) FILTER (WHERE rn <= N)` 표준 PG aggregate 패턴 채택
+
+**상태**: 확정  
+**날짜**: 2026-05-14  
+**태그**: `language:sql`, `db:postgres`, `area:api`, `pattern:json-agg-filter`, `task:2026-05-14-skills-project-breakdown`
+
+### 컨텍스트
+ADR-025 의 `ROW_NUMBER()` window function 으로 Top-N 행을 매긴 뒤, JSON array 형태로 응답에 실으려면 aggregate 안에서 (a) Top-N 만 필터하고 (b) 결정적 순서로 정렬해야 한다. 두 후보: (a) `json_agg(...) FILTER (WHERE rn <= N)` + aggregate 내부 `ORDER BY` (b) subquery LIMIT N → 다시 wrap.
+
+### 결정
+PG aggregate 표준 문법 `json_agg(json_build_object(...) ORDER BY <determ_keys>) FILTER (WHERE rn <= N)` 를 채택한다. SQL:2003 표준 + PostgreSQL 9.4+ 안정 문법이며 Argos 의 PG 11+ 환경에서 안전하게 사용 가능.
+
+또한 `timestamptz` 컬럼은 aggregate 안에서 `to_char(<col> AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` 로 ISO8601 UTC 문자열로 변환해 mapper 가 Date 객체 가정을 갖지 않도록 한다.
+
+### 근거
+- aggregate 내부의 ORDER BY + FILTER 조합으로 CTE 한 단계 안에서 Top-N JSON 배열을 만들 수 있어 plan 이 짧다.
+- subquery + LIMIT 방식은 array 로 묶기 위해 또 한 번 wrap 이 필요 → CTE 두 개 추가, 가독성/복잡도 증가.
+- application 측에서 자르는 방식은 DB→APP 전송량을 증가시킨다 (ADR-029 의 페이로드 축소 원칙 위배).
+- `to_char(... AT TIME ZONE 'UTC', ...)` 로 timestamp 직렬화를 SQL 측에서 결정적 ISO 문자열로 고정 — mapper 가 row 의 timestamp 형태 추측 안 함.
+
+### 트레이드오프
+- aggregate ORDER BY 와 FILTER 가 같이 쓰여 SQL 행이 길어져 가독성 약간 저하.
+- timestamp 직렬화 로직이 SQL 에 박힘 — timezone/precision 정책 변경 시 SQL 수정 필요.
+
+### 대안
+- **subquery + `LIMIT N` 으로 자른 뒤 다시 `json_agg`**: CTE 한 단계 추가, plan 복잡. 거절.
+- **window 결과를 application 에서 자르기**: DB→APP 전송량 증가. 거절.
+- **timestamp 를 raw 로 보내고 mapper 에서 Date→ISO 변환**: row mapper 가 PG 의 timestamp 직렬화 형태(Date 객체 vs 문자열) 에 의존 — fragile. 거절.
+
+### 참고
+- docs/tasks/2026-05-14-skills-project-breakdown/03-plan.md §Decision-10
+- ADR-025 (window function 으로 Top-N rank)
+- ADR-029 (페이로드 Top-N + count 원칙)

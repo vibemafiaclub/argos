@@ -44,7 +44,8 @@ export async function GET(
           skill_name,
           session_id,
           user_id,
-          timestamp
+          timestamp,
+          events.project_id AS project_id
         FROM events
         WHERE is_skill_call = true
           AND project_id = ANY(${projectIds}::text[])
@@ -57,7 +58,8 @@ export async function GET(
           slash_match.match[1] AS skill_name,
           m.session_id,
           s.user_id,
-          m.timestamp
+          m.timestamp,
+          s.project_id AS project_id
         FROM messages m
         JOIN claude_sessions s ON s.id = m.session_id
         CROSS JOIN LATERAL regexp_matches(
@@ -78,6 +80,12 @@ export async function GET(
               AND e.skill_name = slash_match.match[1]
           )
       ),
+      -- all_skill_calls: union CTE 를 독립 CTE 로 승격 — skill_events 와 skill_project_aggregates 가 공유하므로 union 중복 실행 방지 (ADR-025)
+      all_skill_calls AS (
+        SELECT * FROM event_skill_calls
+        UNION ALL
+        SELECT * FROM message_slash_calls
+      ),
       skill_events AS (
         SELECT
           skill_name,
@@ -85,11 +93,7 @@ export async function GET(
           COUNT(DISTINCT session_id) AS session_count,
           COUNT(DISTINCT user_id)    AS user_count,
           MAX(timestamp)             AS last_used_at
-        FROM (
-          SELECT * FROM event_skill_calls
-          UNION ALL
-          SELECT * FROM message_slash_calls
-        ) all_skill_calls
+        FROM all_skill_calls
         GROUP BY skill_name
       ),
       skill_durations AS (
@@ -106,6 +110,63 @@ export async function GET(
           AND m.timestamp >= ${from}
           AND m.timestamp <= ${to}
         GROUP BY m.tool_input->>'skill'
+      ),
+      -- skill_project_aggregates: skill+project 차원 집계. 다중 권한 가드 (G4·M2):
+      --   1) all_skill_calls base 가 이미 project_id = ANY(projectIds) 필터
+      --   2) WHERE 절에서 redundant 하지만 명시적으로 재가드
+      --   3) JOIN projects 에 p.org_id 가드로 org 격리
+      skill_project_aggregates AS (
+        SELECT
+          sc.skill_name,
+          sc.project_id,
+          p.name AS project_name,
+          COUNT(*) AS invocations,
+          MAX(sc.timestamp) AS last_used_at
+        FROM all_skill_calls sc
+        JOIN projects p
+          ON p.id = sc.project_id
+         AND p.org_id = ${access.org.id}
+        WHERE sc.project_id = ANY(${projectIds}::text[])
+        GROUP BY sc.skill_name, sc.project_id, p.name
+      ),
+      -- skill_project_ranked: ROW_NUMBER() window function 으로 skill 별 invocations Top 순위 매기기 (ADR-025)
+      --   tiebreaker: invocations DESC, project_name ASC, project_id ASC (ADR-026 결정적 정렬)
+      skill_project_ranked AS (
+        SELECT
+          skill_name,
+          project_id,
+          project_name,
+          invocations,
+          last_used_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY skill_name
+            ORDER BY invocations DESC, project_name ASC, project_id ASC
+          ) AS rn
+        FROM skill_project_aggregates
+      ),
+      -- skill_project_breakdown: Top 5 를 json_agg + FILTER 로 배열화, total_project_count 로 additionalProjectCount 계산 기반 제공 (ADR-031)
+      --   to_char(...AT TIME ZONE 'UTC', ...) 로 timestamptz → ISO8601 UTC 문자열 변환 (mapper 에서 Date 가정 제거)
+      --   COALESCE('[]'::json) 로 skill 에 project 0개일 때도 non-null 보장
+      skill_project_breakdown AS (
+        SELECT
+          skill_name,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'projectId',   project_id,
+                'projectName', project_name,
+                'invocations', invocations,
+                'lastUsedAt',  to_char(
+                                 last_used_at AT TIME ZONE 'UTC',
+                                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                               )
+              ) ORDER BY invocations DESC, project_name ASC, project_id ASC
+            ) FILTER (WHERE rn <= 5),
+            '[]'::json
+          ) AS projects_json,
+          COUNT(*) AS total_project_count
+        FROM skill_project_ranked
+        GROUP BY skill_name
       )
       SELECT
         e.skill_name,
@@ -114,10 +175,14 @@ export async function GET(
         e.user_count,
         e.last_used_at,
         d.median_duration_ms,
-        d.duration_sample_count
+        d.duration_sample_count,
+        -- LEFT JOIN miss 대비 COALESCE 로 non-null 보장 (WU-2 mapper 방어 로직과 협약)
+        COALESCE(b.projects_json, '[]'::json)   AS projects_json,
+        COALESCE(b.total_project_count, 0)       AS total_project_count
       FROM skill_events e
       LEFT JOIN skill_durations d USING (skill_name)
-      ORDER BY e.call_count DESC
+      LEFT JOIN skill_project_breakdown b USING (skill_name)
+      ORDER BY e.call_count DESC, e.skill_name ASC
       LIMIT 50
     `
 
