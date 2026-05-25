@@ -61,12 +61,15 @@ export async function POST(req: Request) {
     }
 
     // 3. ClaudeSession upsert (create-only, 이미 존재하면 update 없음)
+    // 세션 출처(agent)는 생성 시 payload.agent 로 기록. 모든 Codex 이벤트가 'CODEX' 를 실어 보내므로
+    // 어느 이벤트가 세션을 만들든 올바르게 기록된다. 미지정(구버전 CLI)은 CLAUDE.
     await db.claudeSession.upsert({
       where: { id: payload.sessionId },
       create: {
         id: payload.sessionId,
         projectId: payload.projectId,
         userId,
+        agent: payload.agent ?? 'CLAUDE',
         transcriptPath: null,
       },
       update: {},
@@ -128,6 +131,8 @@ export async function POST(req: Request) {
               where: { id: payload.sessionId },
               data: {
                 endedAt: new Date(),
+                // create 시 누락됐어도 STOP 에서 출처를 교정 (Codex STOP 은 항상 agent 를 실어 보냄)
+                ...(payload.agent ? { agent: payload.agent } : {}),
                 ...(payload.title !== undefined ? { title: payload.title } : {}),
                 ...(payload.summary !== undefined ? { summary: payload.summary } : {}),
               },

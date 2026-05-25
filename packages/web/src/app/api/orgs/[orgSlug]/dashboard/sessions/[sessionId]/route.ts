@@ -95,6 +95,7 @@ export async function GET(
       id: session.id,
       userId: session.user.id,
       userName: session.user.name,
+      agent: session.agent,
       startedAt: session.startedAt.toISOString(),
       endedAt: session.endedAt?.toISOString() ?? null,
       inputTokens: totalInput,

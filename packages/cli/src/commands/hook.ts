@@ -196,6 +196,8 @@ export const makeHookCommand: CommandFactory<HookCommandOptions> =
 
       // Build base payload
       const payload = buildPayload(event, project)
+      // 세션 출처를 서버로 전달 (대시보드 attribution)
+      payload.agent = agent === 'codex' ? 'CODEX' : 'CLAUDE'
 
       // SessionStart: detect slash command (Claude Code transcript only — Codex 엔 대응 개념이 없다)
       if (agent === 'claude' && event.hook_event_name === 'SessionStart' && event.transcript_path) {
