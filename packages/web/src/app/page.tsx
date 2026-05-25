@@ -23,7 +23,7 @@ export default async function Home() {
             />
             <span className="text-lg font-semibold tracking-tight">Argos</span>
             <span className="hidden text-xs text-muted-foreground sm:inline">
-              analytics for Claude Code teams
+              analytics for Claude Code & Codex teams
             </span>
           </Link>
           <nav className="flex items-center gap-2">
@@ -321,8 +321,8 @@ export default async function Home() {
                 a="세션 종료 시 HUMAN / ASSISTANT / TOOL 메시지 전체가 서버로 전송됩니다. 각 메시지 최대 50,000자에서 절단됩니다. 민감한 프롬프트를 다루는 환경이라면 자체호스팅을 권장합니다."
               />
               <FaqItem
-                q="Anthropic API 키나 토큰이 수집되나요?"
-                a="아니오. Argos는 Claude Code 훅 이벤트만 받습니다. Anthropic API 키, 시스템 환경변수, OAuth 토큰은 수집 대상이 아닙니다."
+                q="API 키나 토큰이 수집되나요?"
+                a="아니오. Argos는 Claude Code · Codex 훅 이벤트만 받습니다. Anthropic/OpenAI API 키, 시스템 환경변수, OAuth 토큰은 수집 대상이 아닙니다."
               />
               <FaqItem
                 q="팀원이 제 세션 내용을 볼 수 있나요?"
@@ -338,7 +338,7 @@ export default async function Home() {
               />
               <FaqItem
                 q="CI/CD나 headless 환경에서도 동작하나요?"
-                a="동작합니다. Claude Code가 돌아가는 어떤 환경이든 훅이 실행되면 이벤트를 보냅니다. CI 러너, GitHub Actions, 로컬 개발자 머신 모두에서 동일한 대시보드로 모입니다."
+                a="동작합니다. Claude Code · Codex 가 돌아가는 어떤 환경이든 훅이 실행되면 이벤트를 보냅니다. CI 러너, GitHub Actions, 로컬 개발자 머신 모두에서 동일한 대시보드로 모입니다. (Codex 는 최초 1회 /hooks 에서 trust 필요)"
               />
               <FaqItem
                 q="토큰 사용량만 보고 싶다면 ccusage 같은 OSS CLI로 충분하지 않나요?"
