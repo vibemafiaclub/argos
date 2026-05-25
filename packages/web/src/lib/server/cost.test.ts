@@ -86,6 +86,28 @@ describe('getModelPricing', () => {
     const p = getModelPricing('unknown-model')
     expect(p).toEqual(MODEL_PRICING.default)
   })
+
+  it('OpenAI(Codex) gpt-5.5 = $5 / $30, cached $0.5, cache write 0', () => {
+    const p = getModelPricing('gpt-5.5')
+    expect(p.inputPerM).toBe(5)
+    expect(p.outputPerM).toBe(30)
+    expect(p.cacheReadPerM).toBe(0.5)
+    expect(p.cacheWritePerM).toBe(0)
+  })
+
+  it('OpenAI gpt-5.4 / mini / nano / 5.3-codex 매핑', () => {
+    expect(getModelPricing('gpt-5.4').outputPerM).toBe(15)
+    expect(getModelPricing('gpt-5.4-mini').inputPerM).toBe(0.75)
+    expect(getModelPricing('gpt-5.4-nano').outputPerM).toBe(1.25)
+    expect(getModelPricing('gpt-5.3-codex').inputPerM).toBe(1.75)
+  })
+
+  it('OpenAI codex 변형/스냅샷은 base prefix 로 흡수', () => {
+    expect(normalizeModelName('gpt-5.5-codex')).toBe('gpt-5-5')
+    expect(normalizeModelName('gpt-5-codex')).toBe('gpt-5-codex')
+    expect(getModelPricing('gpt-5-codex').inputPerM).toBe(1.25)
+    expect(normalizeModelName('gpt-5.5-2026-01-15')).toBe('gpt-5-5')
+  })
 })
 
 describe('calculateCost', () => {

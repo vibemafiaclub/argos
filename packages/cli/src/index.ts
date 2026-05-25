@@ -38,6 +38,7 @@ program
 program
   .command('hook')
   .description('[internal] process hook event from stdin')
+  .option('--agent <agent>', 'source agent: claude (default) or codex')
   .action(makeHookCommand(realDeps))
 
 // Status command
