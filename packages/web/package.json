@@ -46,6 +46,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
     "eslint-config-next": "^16.2.3",
     "prisma": "^6",
     "tailwindcss": "^4",
