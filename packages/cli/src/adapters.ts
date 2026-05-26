@@ -7,6 +7,7 @@ import { apiRequest } from './lib/api-client.js'
 import { injectHooks } from './lib/hooks-inject.js'
 import { sendEventBackground } from './lib/event-sender.js'
 import { extractUsageFromTranscript, extractUsagePerTurn, detectSlashCommand, extractMessages, extractSummary } from './lib/transcript.js'
+import { extractUsageFromCodexTranscript, extractUsagePerTurnFromCodexTranscript, extractMessagesFromCodexTranscript } from './lib/transcript-codex.js'
 import type { ExternalDeps } from './deps.js'
 import type { CreateProjectResponse, ExchangeResponse } from '@argos/shared'
 
@@ -110,6 +111,9 @@ export const realDeps: ExternalDeps = {
     detectSlashCommand: detectSlashCommand,
     extractMessages: extractMessages,
     extractSummary: extractSummary,
+    extractUsageCodex: extractUsageFromCodexTranscript,
+    extractUsagePerTurnCodex: extractUsagePerTurnFromCodexTranscript,
+    extractMessagesCodex: extractMessagesFromCodexTranscript,
   },
   events: {
     sendBackground: (opts) => sendEventBackground(opts),

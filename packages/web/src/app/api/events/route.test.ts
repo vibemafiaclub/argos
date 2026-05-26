@@ -153,4 +153,32 @@ describe('POST /api/events — WU-4 응답 shape', () => {
     // 403 응답에는 project 필드가 없어야 한다 (정답 orgSlug 누설 금지)
     expect(body.project).toBeUndefined()
   })
+
+  it('(c) agent=CODEX 페이로드 → 세션 create 에 agent=CODEX 기록', async () => {
+    vi.mocked(db.project.findUnique).mockResolvedValue({
+      id: 'project-1',
+      orgId: 'org-1',
+      organization: { slug: 'my-org', memberships: [{ userId: 'user-1', role: 'MEMBER' }] },
+    } as unknown as Awaited<ReturnType<typeof db.project.findUnique>>)
+
+    await POST(makeRequest({ ...BASE_PAYLOAD, agent: 'CODEX' }))
+
+    expect(db.claudeSession.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ agent: 'CODEX' }) }),
+    )
+  })
+
+  it('(d) agent 미지정 → 세션 create 에 agent=CLAUDE (후방호환)', async () => {
+    vi.mocked(db.project.findUnique).mockResolvedValue({
+      id: 'project-1',
+      orgId: 'org-1',
+      organization: { slug: 'my-org', memberships: [{ userId: 'user-1', role: 'MEMBER' }] },
+    } as unknown as Awaited<ReturnType<typeof db.project.findUnique>>)
+
+    await POST(makeRequest())
+
+    expect(db.claudeSession.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ agent: 'CLAUDE' }) }),
+    )
+  })
 })

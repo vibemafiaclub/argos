@@ -25,7 +25,7 @@ export interface ExternalDeps {
     revokeToken(token: string, apiUrl: string): Promise<void>
   }
   hooks: {
-    inject(settingsPath: string): 'injected' | 'already_present'
+    inject(settingsPath: string, agent?: 'claude' | 'codex'): 'injected' | 'already_present'
     fileExists(path: string): boolean
   }
   prompt: {
@@ -37,6 +37,10 @@ export interface ExternalDeps {
     detectSlashCommand(path: string): Promise<string | null>
     extractMessages(path: string): Promise<MessagePayload[]>
     extractSummary(path: string): Promise<string | null>
+    // Codex rollout 파서 (agent === 'codex' 일 때 사용)
+    extractUsageCodex(path: string): Promise<UsagePayload | null>
+    extractUsagePerTurnCodex(path: string): Promise<UsagePerTurnPayload[]>
+    extractMessagesCodex(path: string): Promise<MessagePayload[]>
   }
   events: {
     sendBackground(opts: SendEventBackgroundOpts): void

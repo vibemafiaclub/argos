@@ -42,13 +42,26 @@ export const makeStatusCommand: CommandFactory =
 
     console.log()
 
-    // Hooks status
-    const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
-    if (deps.hooks.fileExists(settingsPath)) {
+    // Hooks status (Claude Code + Codex)
+    const claudePath = join(deps.cwd(), '.claude', 'settings.json')
+    const codexPath = join(deps.cwd(), '.codex', 'hooks.json')
+    const hasClaude = deps.hooks.fileExists(claudePath)
+    const hasCodex = deps.hooks.fileExists(codexPath)
+
+    if (hasClaude) {
       console.log(chalk.green('✓ Claude Code hooks 설정 파일 존재'))
-      console.log('  경로: ' + settingsPath)
+      console.log('  경로: ' + claudePath)
     } else {
       console.log(chalk.yellow('⚠ Claude Code hooks 설정 파일 없음'))
+    }
+    if (hasCodex) {
+      console.log(chalk.green('✓ Codex hooks 설정 파일 존재'))
+      console.log('  경로: ' + codexPath)
+      console.log(chalk.dim('  (Codex 는 /hooks 에서 trust 후에 동작합니다)'))
+    } else {
+      console.log(chalk.yellow('⚠ Codex hooks 설정 파일 없음'))
+    }
+    if (!hasClaude && !hasCodex) {
       console.log('  argos를 실행하여 hooks를 설치하세요.')
     }
   }

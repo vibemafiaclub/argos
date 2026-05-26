@@ -130,7 +130,7 @@ function OverviewContent({
             아직 수집된 데이터가 없습니다
           </h2>
           <p className="text-sm text-muted-foreground mb-4">
-            팀원들이 argos를 설정하고 Claude Code를 사용하면 여기에 데이터가 표시됩니다.
+            팀원들이 argos를 설정하고 Claude Code · Codex 를 사용하면 여기에 데이터가 표시됩니다.
           </p>
         </div>
       </div>

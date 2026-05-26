@@ -1,4 +1,4 @@
-import { MessageRole } from './events.js'
+import { MessageRole, AgentSource } from './events.js'
 
 /** 페이지네이션 응답 공통 형태 (offset 방식) */
 export interface PaginatedResult<T> {
@@ -129,6 +129,8 @@ export interface SessionItem {
   outputTokens: number
   estimatedCostUsd: number
   eventCount: number
+  /** 세션 출처 에이전트. 기존 세션은 CLAUDE(기본값). */
+  agent: AgentSource
   /** 저장된 session.title, 없으면 첫 HUMAN 메시지로 fallback (200자 truncation). 완전히 비어있으면 null */
   title: string | null
   /** org-scoped 응답에서는 반드시 포함. 기존 project-scoped 응답은 미포함(후방호환). */

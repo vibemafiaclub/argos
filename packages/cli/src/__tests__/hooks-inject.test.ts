@@ -15,7 +15,8 @@ interface HookEntry {
 }
 
 function isArgosCommand(cmd: string): boolean {
-  return cmd === ARGOS_COMMAND || cmd === ARGOS_SESSION_START_COMMAND
+  // 프로덕션 로직과 동일하게 claude/codex/bootstrap 변형을 모두 인식한다.
+  return cmd.includes('argos hook')
 }
 
 function hasArgosHook(entries: HookEntry[]): boolean {
@@ -192,5 +193,46 @@ describe('injectHooks', () => {
 
     const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
     expect(argosHookCount(settings.hooks.SessionStart)).toBe(1)
+  })
+})
+
+describe('injectHooks (Codex agent)', () => {
+  let tempDir: string
+  let codexPath: string
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'argos-codex-'))
+    codexPath = join(tempDir, '.codex', 'hooks.json')
+  })
+  afterEach(() => rmSync(tempDir, { recursive: true, force: true }))
+
+  it('writes .codex/hooks.json with `argos hook --agent codex` for all 5 events', () => {
+    const result = injectHooks(codexPath, 'codex')
+    expect(result).toBe('injected')
+    const settings = JSON.parse(readFileSync(codexPath, 'utf8'))
+    for (const event of HOOK_EVENTS) {
+      const entries = settings.hooks[event] as HookEntry[]
+      expect(entries, `missing ${event}`).toBeDefined()
+      const cmd = entries[entries.length - 1].hooks[0].command
+      expect(cmd).toContain('argos hook --agent codex')
+    }
+  })
+
+  it('SessionStart uses bootstrap + --agent codex', () => {
+    injectHooks(codexPath, 'codex')
+    const settings = JSON.parse(readFileSync(codexPath, 'utf8'))
+    const cmd = (settings.hooks.SessionStart as HookEntry[])[0].hooks[0].command
+    expect(cmd).toContain('npm install -g argos-ai@latest')
+    expect(cmd).toContain('argos hook --agent codex')
+  })
+
+  it('is idempotent and does not duplicate across calls', () => {
+    injectHooks(codexPath, 'codex')
+    const result = injectHooks(codexPath, 'codex')
+    expect(result).toBe('already_present')
+    const settings = JSON.parse(readFileSync(codexPath, 'utf8'))
+    for (const event of HOOK_EVENTS) {
+      expect(argosHookCount(settings.hooks[event])).toBe(1)
+    }
   })
 })

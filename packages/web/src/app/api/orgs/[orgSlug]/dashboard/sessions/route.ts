@@ -52,6 +52,7 @@ function mapSessionItem(session: SessionWithInclude): SessionItem {
     id: session.id,
     userId: session.user.id,
     userName: session.user.name,
+    agent: session.agent,
     startedAt: session.startedAt.toISOString(),
     endedAt: session.endedAt?.toISOString() ?? null,
     inputTokens: totals.inputTokens,

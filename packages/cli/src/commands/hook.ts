@@ -16,6 +16,26 @@ interface HookStdinPayload {
   tool_response?: string
   tool_use_id?: string
   exit_code?: number
+  model?: string // Codex hook stdin 은 model 을 항상 제공 (Claude Code 엔 없음)
+}
+
+interface HookCommandOptions {
+  agent?: string // 'codex' | 'claude' — hooks.json 에서 `argos hook --agent codex` 로 전달
+}
+
+type Agent = 'claude' | 'codex'
+
+/**
+ * 어느 에이전트의 hook 인지 판별.
+ *  1) 명시적 --agent 플래그 (주입된 hook command 가 전달) — 가장 확실
+ *  2) transcript_path 가 Codex 세션 경로(`/.codex/`)를 가리키는지
+ * 둘 다 아니면 Claude Code(기존 동작)로 간주.
+ */
+export function detectAgent(options: HookCommandOptions, event: HookStdinPayload): Agent {
+  if (options.agent === 'codex' || options.agent === 'claude') return options.agent
+  const tp = event.transcript_path || event.agent_transcript_path || ''
+  if (tp.includes('/.codex/')) return 'codex'
+  return 'claude'
 }
 
 /**
@@ -138,8 +158,8 @@ export function buildPayload(
  * This is called by Claude Code hooks via stdin
  * MUST always exit with code 0
  */
-export const makeHookCommand: CommandFactory =
-  (deps) => async () => {
+export const makeHookCommand: CommandFactory<HookCommandOptions> =
+  (deps) => async (options) => {
     try {
       // Read stdin with 100ms timeout
       const raw = await readStdinWithTimeout(100)
@@ -150,6 +170,7 @@ export const makeHookCommand: CommandFactory =
 
       // Parse hook event
       const event: HookStdinPayload = JSON.parse(raw)
+      const agent = detectAgent(options ?? {}, event)
 
       // Skip sub-agent events — we only track the user's main session.
       // Sub-agent events are identified by SubagentStop or by the presence of agent_id.
@@ -175,9 +196,11 @@ export const makeHookCommand: CommandFactory =
 
       // Build base payload
       const payload = buildPayload(event, project)
+      // 세션 출처를 서버로 전달 (대시보드 attribution)
+      payload.agent = agent === 'codex' ? 'CODEX' : 'CLAUDE'
 
-      // SessionStart: detect slash command
-      if (event.hook_event_name === 'SessionStart' && event.transcript_path) {
+      // SessionStart: detect slash command (Claude Code transcript only — Codex 엔 대응 개념이 없다)
+      if (agent === 'claude' && event.hook_event_name === 'SessionStart' && event.transcript_path) {
         const slashSkill = await deps.transcript.detectSlashCommand(event.transcript_path)
         if (slashSkill) {
           payload.isSlashCommand = true
@@ -192,15 +215,24 @@ export const makeHookCommand: CommandFactory =
         const transcriptPath = event.hook_event_name === 'SubagentStop'
           ? event.agent_transcript_path
           : event.transcript_path
+
+        // 에이전트별 transcript 파서 선택. Codex 는 rollout JSONL 포맷이 완전히 달라 별도 파서를 쓴다.
+        const tx = deps.transcript
+        const extractUsage = agent === 'codex' ? tx.extractUsageCodex : tx.extractUsage
+        const extractUsagePerTurn = agent === 'codex' ? tx.extractUsagePerTurnCodex : tx.extractUsagePerTurn
+        const extractMessages = agent === 'codex' ? tx.extractMessagesCodex : tx.extractMessages
+
         if (transcriptPath) {
-          const usage = await deps.transcript.extractUsage(transcriptPath)
+          const usage = await extractUsage(transcriptPath)
           if (usage) {
+            // Codex: transcript 에서 model 을 못 뽑으면 hook stdin 의 model 로 보강
+            if (!usage.model && event.model) usage.model = event.model
             payload.usage = usage
           }
 
           // Extract per-turn usage for session timeline
           try {
-            const usagePerTurn = await deps.transcript.extractUsagePerTurn(transcriptPath)
+            const usagePerTurn = await extractUsagePerTurn(transcriptPath)
             if (usagePerTurn.length > 0) {
               payload.usagePerTurn = usagePerTurn
             }
@@ -208,13 +240,14 @@ export const makeHookCommand: CommandFactory =
             // Ignore errors - usagePerTurn is optional enhancement
           }
 
-          const messages = await deps.transcript.extractMessages(transcriptPath)
+          const messages = await extractMessages(transcriptPath)
           if (messages.length > 0) {
             payload.messages = messages
           }
 
-          // Main session only: pick up transcript "summary" line (present after /compact or on resume)
-          if (event.hook_event_name === 'Stop') {
+          // Main session only: pick up transcript "summary" line (present after /compact or on resume).
+          // Codex transcript 엔 summary 라인 개념이 없어 Claude 일 때만 시도한다.
+          if (agent === 'claude' && event.hook_event_name === 'Stop') {
             try {
               const summary = await deps.transcript.extractSummary(transcriptPath)
               if (summary) {
