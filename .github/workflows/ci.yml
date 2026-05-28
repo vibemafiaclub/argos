@@ -26,3 +26,4 @@ jobs:
           JWT_SECRET: "ci-placeholder-jwt-secret-min-32-chars"
           DATABASE_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder"
           DIRECT_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder"
+          ADMIN_SECRET: "ci-placeholder-admin-password-123"

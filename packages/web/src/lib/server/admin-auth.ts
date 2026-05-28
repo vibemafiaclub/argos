@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { env } from './env'
 
 export const ADMIN_USERNAME = 'admin'
-export const ADMIN_PASSWORD = env.ADMIN_PASSWORD
+export const ADMIN_SECRET = env.ADMIN_SECRET
 
 const ADMIN_SESSION_COOKIE = 'argos_admin_session'
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
@@ -26,11 +26,11 @@ function sign(payload: string): string {
 
 export function verifyAdminCredentials(input: {
   username: string
-  password: string
+  secret: string
 }): boolean {
   return (
     safeEqual(input.username, ADMIN_USERNAME) &&
-    safeEqual(input.password, ADMIN_PASSWORD)
+    safeEqual(input.secret, ADMIN_SECRET)
   )
 }
 
