@@ -302,7 +302,8 @@ export function EventList({
 
   return (
     <List
-      rowComponent={MemoizedRow}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rowComponent={MemoizedRow as any}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{
