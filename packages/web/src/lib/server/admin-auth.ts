@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { env } from './env'
 
 export const ADMIN_USERNAME = 'admin'
-export const ADMIN_PASSWORD = 'og9oRajx7h88v1RIj3eDgdrh9jgLYVV3'
+export const ADMIN_PASSWORD = env.ADMIN_PASSWORD
 
 const ADMIN_SESSION_COOKIE = 'argos_admin_session'
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
