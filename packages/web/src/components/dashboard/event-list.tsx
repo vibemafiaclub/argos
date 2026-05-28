@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, memo } from "react";
 import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
@@ -259,6 +259,26 @@ function Row({
   );
 }
 
+const MemoizedRow = memo(Row, (prevProps, nextProps) => {
+  if (prevProps.index !== nextProps.index) return false;
+  if (prevProps.style !== nextProps.style) return false;
+  if (prevProps.sessionStartedAt !== nextProps.sessionStartedAt) return false;
+  if (prevProps.onSelect !== nextProps.onSelect) return false;
+  if (prevProps.onToggleGroup !== nextProps.onToggleGroup) return false;
+
+  const prevRow = prevProps.rows[prevProps.index];
+  const nextRow = nextProps.rows[nextProps.index];
+
+  if (prevRow !== nextRow) return false;
+
+  const prevIsSelected = prevRow && prevRow.kind !== 'groupHeader' ? prevRow.idx === prevProps.selectedIdx : false;
+  const nextIsSelected = nextRow && nextRow.kind !== 'groupHeader' ? nextRow.idx === nextProps.selectedIdx : false;
+
+  if (prevIsSelected !== nextIsSelected) return false;
+
+  return true;
+});
+
 export function EventList({
   events,
   selectedIdx,
@@ -282,7 +302,7 @@ export function EventList({
 
   return (
     <List
-      rowComponent={Row}
+      rowComponent={MemoizedRow}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{
