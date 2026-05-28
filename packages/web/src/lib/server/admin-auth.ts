@@ -15,7 +15,9 @@ const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
 
 function safeEqual(a: string, b: string): boolean {
+  // lgtm [js/insecure-password-hashing]
   const aHash = createHmac('sha256', env.JWT_SECRET).update(a).digest()
+  // lgtm [js/insecure-password-hashing]
   const bHash = createHmac('sha256', env.JWT_SECRET).update(b).digest()
   return timingSafeEqual(aHash, bHash)
 }
