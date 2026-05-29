@@ -15,11 +15,14 @@ const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
 
+function getHash(value: string) {
+  // codeql[js/insecure-password-hashing]
+  return createHmac('sha256', env.JWT_SECRET).update(value).digest()
+}
+
 function safeEqual(a: string, b: string): boolean {
-  // codeql[js/insecure-password-hashing]
-  const aHash = createHmac('sha256', env.JWT_SECRET).update(a).digest()
-  // codeql[js/insecure-password-hashing]
-  const bHash = createHmac('sha256', env.JWT_SECRET).update(b).digest()
+  const aHash = getHash(a)
+  const bHash = getHash(b)
   return timingSafeEqual(aHash, bHash)
 }
 
