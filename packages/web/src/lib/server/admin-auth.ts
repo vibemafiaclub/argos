@@ -6,7 +6,10 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { env } from './env'
 
-// 🛡️ Sentinel: Removed hardcoded admin credentials
+// 🛡️ Sentinel: Removed hardcoded admin credentials, using env vars
+export const ADMIN_USERNAME = env.ADMIN_USERNAME
+export const ADMIN_PASSWORD = env.ADMIN_PASSWORD
+
 const ADMIN_SESSION_COOKIE = 'argos_admin_session'
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
@@ -29,15 +32,15 @@ export function verifyAdminCredentials(input: {
   password: string
 }): boolean {
   return (
-    safeEqual(input.username, env.ADMIN_USERNAME) &&
-    safeEqual(input.password, env.ADMIN_PASSWORD)
+    safeEqual(input.username, ADMIN_USERNAME) &&
+    safeEqual(input.password, ADMIN_PASSWORD)
   )
 }
 
 export function createAdminSessionCookieValue(): string {
   const expiresAt = Date.now() + ADMIN_SESSION_TTL_MS
   const nonce = randomBytes(16).toString('base64url')
-  const payload = `${env.ADMIN_USERNAME}.${expiresAt}.${nonce}`
+  const payload = `${ADMIN_USERNAME}.${expiresAt}.${nonce}`
   return `${payload}.${sign(payload)}`
 }
 
@@ -67,7 +70,7 @@ export function verifyAdminSessionCookie(value: string | undefined): boolean {
   const [username, expiresAtRaw, nonce, signature] = parts
   const payload = `${username}.${expiresAtRaw}.${nonce}`
   if (!safeEqual(signature, sign(payload))) return false
-  if (!safeEqual(username, env.ADMIN_USERNAME)) return false
+  if (!safeEqual(username, ADMIN_USERNAME)) return false
 
   const expiresAt = Number(expiresAtRaw)
   return Number.isFinite(expiresAt) && Date.now() <= expiresAt
