@@ -1,0 +1,4 @@
+## 2024-05-29 - [CRITICAL] Fix hardcoded admin credentials
+**Vulnerability:** Hardcoded admin username and password (`ADMIN_USERNAME` and `ADMIN_PASSWORD`) were found in `packages/web/src/lib/server/admin-auth.ts`. This poses a critical security risk as it exposes credentials in source code.
+**Learning:** Security-sensitive configuration, especially credentials, should never be checked into version control. They should be managed via environment variables and validated at runtime using a schema (like Zod) to prevent application startup if required configurations are missing.
+**Prevention:** Always use environment variables for secrets and credentials. Use Zod schemas (e.g., `EnvSchema` in `env.ts`) to enforce the presence of required environment variables. Keep `.env.example` and CI configurations updated with placeholders.
