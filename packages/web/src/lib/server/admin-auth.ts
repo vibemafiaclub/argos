@@ -21,15 +21,15 @@ const ADMIN_PASSWORD_KDF_DIGEST = 'sha256'
 
 const adminPasswordDerivedKey = pbkdf2Sync(
   ADMIN_PASSWORD,
-  env.JWT_SECRET,
+  Buffer.from(env.JWT_SECRET, 'utf8'),
   ADMIN_PASSWORD_KDF_ITERATIONS,
   ADMIN_PASSWORD_DERIVED_KEY_LEN,
   ADMIN_PASSWORD_KDF_DIGEST
 )
 
 function safeTimingEqual(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a)
-  const bBuf = Buffer.from(b)
+  const aBuf = Buffer.from(a, 'utf8')
+  const bBuf = Buffer.from(b, 'utf8')
 
   const maxLen = Math.max(aBuf.length, bBuf.length)
   const aPadded = Buffer.alloc(maxLen)
@@ -44,7 +44,7 @@ function safeTimingEqual(a: string, b: string): boolean {
 function safePasswordEqual(password: string): boolean {
   const passwordDerivedKey = pbkdf2Sync(
     password,
-    env.JWT_SECRET,
+    Buffer.from(env.JWT_SECRET, 'utf8'),
     ADMIN_PASSWORD_KDF_ITERATIONS,
     ADMIN_PASSWORD_DERIVED_KEY_LEN,
     ADMIN_PASSWORD_KDF_DIGEST
