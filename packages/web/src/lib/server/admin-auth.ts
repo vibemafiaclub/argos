@@ -15,18 +15,18 @@ const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
 
 function safeEqual(a: string, b: string): boolean {
-  const aHash = createHmac('sha256', env.JWT_SECRET).update(a).digest()
-  const bHash = createHmac('sha256', env.JWT_SECRET).update(b).digest()
-  return timingSafeEqual(aHash, bHash)
-}
-
-function safeEqualBuffer(a: string, b: string): boolean {
   const aBuf = Buffer.from(a)
   const bBuf = Buffer.from(b)
-  if (aBuf.length !== bBuf.length) {
-    return false
-  }
-  return timingSafeEqual(aBuf, bBuf)
+  const maxLen = Math.max(aBuf.length, bBuf.length)
+  if (maxLen > 4096) return false
+
+  const aPadded = Buffer.alloc(maxLen)
+  const bPadded = Buffer.alloc(maxLen)
+  aBuf.copy(aPadded)
+  bBuf.copy(bPadded)
+
+  const equal = timingSafeEqual(aPadded, bPadded)
+  return equal && aBuf.length === bBuf.length
 }
 
 function sign(payload: string): string {
@@ -39,7 +39,7 @@ export function verifyAdminCredentials(input: {
 }): boolean {
   return (
     safeEqual(input.username, ADMIN_USERNAME) &&
-    safeEqualBuffer(input.secret, ADMIN_SECRET)
+    safeEqual(input.secret, ADMIN_SECRET)
   )
 }
 
