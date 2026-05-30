@@ -209,7 +209,7 @@ type RowProps = {
   onToggleGroup: (firstIdx: number) => void;
 };
 
-const areEqual = (prevProps: RowComponentProps<RowProps>, nextProps: RowComponentProps<RowProps>) => {
+const areEqual = (prevProps: Readonly<RowComponentProps<RowProps>>, nextProps: Readonly<RowComponentProps<RowProps>>) => {
   return (
     prevProps.index === nextProps.index &&
     prevProps.style === nextProps.style &&
@@ -269,7 +269,7 @@ const MemoizedRow = memo(function Row({
       />
     </div>
   );
-}, areEqual) as unknown as React.ComponentType<RowComponentProps<RowProps>>;
+}, areEqual);
 
 export function EventList({
   events,
@@ -294,8 +294,8 @@ export function EventList({
 
   return (
     <List
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rowComponent={MemoizedRow as any}
+      // @ts-expect-error react-window types for rowComponent don't perfectly align with React.memo
+      rowComponent={MemoizedRow}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{
