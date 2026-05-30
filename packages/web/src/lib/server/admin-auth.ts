@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { createHmac, randomBytes, timingSafeEqual } from 'crypto'
+import { createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'crypto'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -15,15 +15,41 @@ const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
 
-function getHash(value: string) {
-  // codeql[js/insecure-password-hashing]
-  return createHmac('sha256', env.JWT_SECRET).update(value).digest()
+const ADMIN_PASSWORD_DERIVED_KEY_LEN = 32
+const ADMIN_PASSWORD_KDF_ITERATIONS = 210_000
+const ADMIN_PASSWORD_KDF_DIGEST = 'sha256'
+
+const adminPasswordDerivedKey = pbkdf2Sync(
+  ADMIN_PASSWORD,
+  env.JWT_SECRET,
+  ADMIN_PASSWORD_KDF_ITERATIONS,
+  ADMIN_PASSWORD_DERIVED_KEY_LEN,
+  ADMIN_PASSWORD_KDF_DIGEST
+)
+
+function safeTimingEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a)
+  const bBuf = Buffer.from(b)
+
+  const maxLen = Math.max(aBuf.length, bBuf.length)
+  const aPadded = Buffer.alloc(maxLen)
+  const bPadded = Buffer.alloc(maxLen)
+  aBuf.copy(aPadded)
+  bBuf.copy(bPadded)
+
+  const contentEqual = timingSafeEqual(aPadded, bPadded)
+  return contentEqual && aBuf.length === bBuf.length
 }
 
-function safeEqual(a: string, b: string): boolean {
-  const aHash = getHash(a)
-  const bHash = getHash(b)
-  return timingSafeEqual(aHash, bHash)
+function safePasswordEqual(password: string): boolean {
+  const passwordDerivedKey = pbkdf2Sync(
+    password,
+    env.JWT_SECRET,
+    ADMIN_PASSWORD_KDF_ITERATIONS,
+    ADMIN_PASSWORD_DERIVED_KEY_LEN,
+    ADMIN_PASSWORD_KDF_DIGEST
+  )
+  return timingSafeEqual(passwordDerivedKey, adminPasswordDerivedKey)
 }
 
 function sign(payload: string): string {
@@ -35,8 +61,8 @@ export function verifyAdminCredentials(input: {
   password: string
 }): boolean {
   return (
-    safeEqual(input.username, ADMIN_USERNAME) &&
-    safeEqual(input.password, ADMIN_PASSWORD)
+    safeTimingEqual(input.username, ADMIN_USERNAME) &&
+    safePasswordEqual(input.password)
   )
 }
 
@@ -72,8 +98,8 @@ export function verifyAdminSessionCookie(value: string | undefined): boolean {
 
   const [username, expiresAtRaw, nonce, signature] = parts
   const payload = `${username}.${expiresAtRaw}.${nonce}`
-  if (!safeEqual(signature, sign(payload))) return false
-  if (!safeEqual(username, ADMIN_USERNAME)) return false
+  if (!safeTimingEqual(signature, sign(payload))) return false
+  if (!safeTimingEqual(username, ADMIN_USERNAME)) return false
 
   const expiresAt = Number(expiresAtRaw)
   return Number.isFinite(expiresAt) && Date.now() <= expiresAt
@@ -105,8 +131,8 @@ export function verifyAdminImpersonationToken(token: string): string | null {
 
   const [prefix, userId, expiresAtRaw, nonce, signature] = parts
   const payload = `${prefix}.${userId}.${expiresAtRaw}.${nonce}`
-  if (!safeEqual(prefix, ADMIN_IMPERSONATION_PREFIX)) return null
-  if (!safeEqual(signature, sign(payload))) return null
+  if (!safeTimingEqual(prefix, ADMIN_IMPERSONATION_PREFIX)) return null
+  if (!safeTimingEqual(signature, sign(payload))) return null
 
   const expiresAt = Number(expiresAtRaw)
   if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return null
