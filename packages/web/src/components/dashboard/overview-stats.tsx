@@ -85,38 +85,49 @@ export function OverviewStats({
       <button
         type="button"
         onClick={() => setExpanded(v => !v)}
+        id="overview-stats-explanation-toggle"
         aria-expanded={expanded}
         aria-controls="overview-stats-explanation"
         className="mt-4 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
-        <span aria-hidden="true" className={cn('inline-block transition-transform', expanded && 'rotate-90')}>▸</span>
+        <span
+          aria-hidden="true"
+          className={cn('inline-block transition-transform', expanded && 'rotate-90')}
+        >
+          ▸
+        </span>
         <span className="font-medium text-foreground">What do these numbers mean?</span>
         <span aria-hidden="true">— {expanded ? 'click to collapse' : 'click to expand'}</span>
       </button>
 
-      {expanded && (
-        <div id="overview-stats-explanation" className="mt-3 text-xs text-muted-foreground space-y-2 leading-relaxed">
-          <p>
-            <span className="font-medium text-foreground">Sessions</span> — 팀원들이 시작한 Claude Code 세션 수.
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Turns</span> — Human → Assistant 한 번의 왕복(Stop 이벤트 기준).
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Input / Output</span> — Claude에 보낸 토큰과 Claude가 응답으로 쓴 토큰의 합계.
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Cache Create</span> — 재사용을 위해 저장된 토큰(예: CLAUDE.md).
-            한 번 지불하면 이후 읽기는 훨씬 저렴해집니다.
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Cache Read</span> — 캐시에서 재사용된 토큰. 일반 input 대비 약 ~10× 싸므로 이 숫자가 높은 건 좋은 신호입니다.
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Est. Cost</span> — 모델별 공식 단가로 계산한 추정 청구액 (USD).
-          </p>
-        </div>
-      )}
+      <div
+        id="overview-stats-explanation"
+        role="region"
+        aria-labelledby="overview-stats-explanation-toggle"
+        hidden={!expanded}
+        className="mt-3 text-xs text-muted-foreground space-y-2 leading-relaxed"
+      >
+        <p>
+          <span className="font-medium text-foreground">Sessions</span> — 팀원들이 시작한 Claude Code 세션 수.
+        </p>
+        <p>
+          <span className="font-medium text-foreground">Turns</span> — Human → Assistant 한 번의 왕복(Stop 이벤트 기준).
+        </p>
+        <p>
+          <span className="font-medium text-foreground">Input / Output</span> — Claude에 보낸 토큰과 Claude가 응답으로 쓴 토큰의 합계.
+        </p>
+        <p>
+          <span className="font-medium text-foreground">Cache Create</span> — 재사용을 위해 저장된 토큰(예: CLAUDE.md). 한 번 지불하면
+          이후 읽기는 훨씬 저렴해집니다.
+        </p>
+        <p>
+          <span className="font-medium text-foreground">Cache Read</span> — 캐시에서 재사용된 토큰. 일반 input 대비 약 ~10× 싸므로 이 숫자가
+          높은 건 좋은 신호입니다.
+        </p>
+        <p>
+          <span className="font-medium text-foreground">Est. Cost</span> — 모델별 공식 단가로 계산한 추정 청구액 (USD).
+        </p>
+      </div>
     </div>
   )
 }
