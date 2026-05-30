@@ -15,18 +15,23 @@ const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
 
 function safeEqual(a: string, b: string): boolean {
+  const aHash = createHmac('sha256', env.JWT_SECRET).update(a).digest()
+  const bHash = createHmac('sha256', env.JWT_SECRET).update(b).digest()
+  return timingSafeEqual(aHash, bHash)
+}
+
+function safeEqualBuffer(a: string, b: string): boolean {
   const aBuf = Buffer.from(a)
   const bBuf = Buffer.from(b)
-  const maxLen = Math.max(aBuf.length, bBuf.length)
-  if (maxLen > 4096) return false
 
-  const aPadded = Buffer.alloc(maxLen)
-  const bPadded = Buffer.alloc(maxLen)
-  aBuf.copy(aPadded)
-  bBuf.copy(bPadded)
+  if (aBuf.length !== bBuf.length) {
+    // To prevent length-based timing attacks without using hashing algorithms
+    // that CodeQL flags as insecure, we perform a dummy timingSafeEqual.
+    timingSafeEqual(bBuf, bBuf)
+    return false
+  }
 
-  const equal = timingSafeEqual(aPadded, bPadded)
-  return equal && aBuf.length === bBuf.length
+  return timingSafeEqual(aBuf, bBuf)
 }
 
 function sign(payload: string): string {
@@ -39,7 +44,7 @@ export function verifyAdminCredentials(input: {
 }): boolean {
   return (
     safeEqual(input.username, ADMIN_USERNAME) &&
-    safeEqual(input.secret, ADMIN_SECRET)
+    safeEqualBuffer(input.secret, ADMIN_SECRET)
   )
 }
 
