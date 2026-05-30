@@ -261,6 +261,18 @@ function Row({
 
 const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   if (prevProps.index !== nextProps.index) return false;
+  if (
+    prevProps.ariaAttributes["aria-posinset"] !==
+    nextProps.ariaAttributes["aria-posinset"]
+  ) {
+    return false;
+  }
+  if (
+    prevProps.ariaAttributes["aria-setsize"] !==
+    nextProps.ariaAttributes["aria-setsize"]
+  ) {
+    return false;
+  }
   if (prevProps.style !== nextProps.style) return false;
   if (prevProps.sessionStartedAt !== nextProps.sessionStartedAt) return false;
   if (prevProps.onSelect !== nextProps.onSelect) return false;
@@ -269,15 +281,38 @@ const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   const prevRow = prevProps.rows[prevProps.index];
   const nextRow = nextProps.rows[nextProps.index];
 
-  if (prevRow !== nextRow) return false;
+  if (!prevRow || !nextRow) return prevRow === nextRow;
+  if (prevRow.kind !== nextRow.kind) return false;
+  if (prevRow.key !== nextRow.key) return false;
 
-  const prevIsSelected = prevRow && prevRow.kind !== 'groupHeader' ? prevRow.idx === prevProps.selectedIdx : false;
-  const nextIsSelected = nextRow && nextRow.kind !== 'groupHeader' ? nextRow.idx === nextProps.selectedIdx : false;
+  if (prevRow.kind === "event" && nextRow.kind === "event") {
+    if (prevRow.event !== nextRow.event) return false;
+    if (prevRow.idx !== nextRow.idx) return false;
+    if (prevRow.indented !== nextRow.indented) return false;
+    if (prevRow.labelOverride !== nextRow.labelOverride) return false;
+  }
+
+  if (prevRow.kind === "groupHeader" && nextRow.kind === "groupHeader") {
+    if (prevRow.toolName !== nextRow.toolName) return false;
+    if (prevRow.count !== nextRow.count) return false;
+    if (prevRow.firstEvent !== nextRow.firstEvent) return false;
+    if (prevRow.groupFirstIdx !== nextRow.groupFirstIdx) return false;
+    if (prevRow.isExpanded !== nextRow.isExpanded) return false;
+  }
+
+  const prevIsSelected =
+    prevRow.kind !== "groupHeader" ? prevRow.idx === prevProps.selectedIdx : false;
+  const nextIsSelected =
+    nextRow.kind !== "groupHeader" ? nextRow.idx === nextProps.selectedIdx : false;
 
   if (prevIsSelected !== nextIsSelected) return false;
 
   return true;
 });
+
+function RowRenderer(props: RowComponentProps<RowProps>) {
+  return <MemoizedRow {...props} />;
+}
 
 export function EventList({
   events,
@@ -302,8 +337,7 @@ export function EventList({
 
   return (
     <List
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rowComponent={MemoizedRow as any}
+      rowComponent={RowRenderer}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{
