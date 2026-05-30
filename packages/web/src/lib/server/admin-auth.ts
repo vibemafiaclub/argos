@@ -15,11 +15,19 @@ const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
 
 function safeEqual(a: string, b: string): boolean {
-  // codeql[js/insecure-password-hashing]
-  const aHash = createHmac('sha256', env.JWT_SECRET).update(a).digest()
-  // codeql[js/insecure-password-hashing]
-  const bHash = createHmac('sha256', env.JWT_SECRET).update(b).digest()
-  return timingSafeEqual(aHash, bHash)
+  if (a.length > 1024 || b.length > 1024) return false
+
+  const aBuf = Buffer.from(a)
+  const bBuf = Buffer.from(b)
+  const maxLen = Math.max(aBuf.length, bBuf.length)
+
+  const aPadded = Buffer.allocUnsafe(maxLen).fill(0)
+  const bPadded = Buffer.allocUnsafe(maxLen).fill(0)
+  aBuf.copy(aPadded)
+  bBuf.copy(bPadded)
+
+  const equal = timingSafeEqual(aPadded, bPadded)
+  return equal && aBuf.length === bBuf.length
 }
 
 function sign(payload: string): string {
