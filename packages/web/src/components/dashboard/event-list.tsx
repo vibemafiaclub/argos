@@ -1,5 +1,5 @@
-import { useMemo, memo } from "react";
-import { List, type RowComponentProps, areEqual } from "react-window";
+import { useCallback, useMemo, memo } from "react";
+import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
   formatSlashCommandText,
@@ -127,22 +127,23 @@ function getSinglePreview(event: TimelineEvent): string {
   return event.toolName;
 }
 
-function getIcon(event: TimelineEvent) {
+function getIconParts(event: TimelineEvent) {
   if (event.kind === "message") {
     if (event.role === "HUMAN") {
-      return { Icon: User, bg: "bg-brand" };
+      return [User, "bg-brand"] as const;
     }
-    return { Icon: Bot, bg: "bg-brand-2" };
+    return [Bot, "bg-brand-2"] as const;
   }
   const isSpecial = event.isSkillCall || event.isAgentCall;
-  return { Icon: Wrench, bg: isSpecial ? "bg-chart-4" : "bg-muted-foreground" };
+  return [Wrench, isSpecial ? "bg-chart-4" : "bg-muted-foreground"] as const;
 }
 
 type RowViewProps = {
   label: string;
   preview: string;
   time: string;
-  icon: ReturnType<typeof getIcon>;
+  Icon: typeof User;
+  iconBg: string;
   isSelected: boolean;
   onClick: () => void;
   indented?: boolean;
@@ -153,13 +154,13 @@ const RowView = memo(function RowView({
   label,
   preview,
   time,
-  icon,
+  Icon,
+  iconBg,
   isSelected,
   onClick,
   indented = false,
   chevron,
 }: RowViewProps) {
-  const { Icon, bg } = icon;
   return (
     <button
       type="button"
@@ -175,7 +176,7 @@ const RowView = memo(function RowView({
       <span
         className={cn(
           "flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
-          bg,
+          iconBg,
         )}
       >
         <Icon className="h-3 w-3 text-background" />
@@ -209,9 +210,83 @@ type RowProps = {
   onToggleGroup: (firstIdx: number) => void;
 };
 
-const Row = memo(function Row({
+function shallowEqualRecord(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): boolean {
+  if (a === b) return true;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+function areRowPropsEqual(
+  prev: RowComponentProps<RowProps>,
+  next: RowComponentProps<RowProps>,
+): boolean {
+  if (prev.index !== next.index) return false;
+
+  if (
+    !shallowEqualRecord(
+      prev.style as unknown as Record<string, unknown>,
+      next.style as unknown as Record<string, unknown>,
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !shallowEqualRecord(
+      prev.ariaAttributes as unknown as Record<string, unknown>,
+      next.ariaAttributes as unknown as Record<string, unknown>,
+    )
+  ) {
+    return false;
+  }
+
+  if (prev.sessionStartedAt !== next.sessionStartedAt) return false;
+  if (prev.onSelect !== next.onSelect) return false;
+  if (prev.onToggleGroup !== next.onToggleGroup) return false;
+
+  const prevRow = prev.rows[prev.index];
+  const nextRow = next.rows[next.index];
+  if (!prevRow || !nextRow) return prevRow === nextRow;
+  if (prevRow.key !== nextRow.key) return false;
+  if (prevRow.kind !== nextRow.kind) return false;
+
+  if (prevRow.kind === "event" && nextRow.kind === "event") {
+    if (prevRow.event !== nextRow.event) return false;
+    if (prevRow.indented !== nextRow.indented) return false;
+    if (prevRow.labelOverride !== nextRow.labelOverride) return false;
+
+    const prevSelected = prevRow.idx === prev.selectedIdx;
+    const nextSelected = nextRow.idx === next.selectedIdx;
+    if (prevSelected !== nextSelected) return false;
+
+    return true;
+  }
+
+  if (prevRow.kind === "groupHeader" && nextRow.kind === "groupHeader") {
+    if (prevRow.firstEvent !== nextRow.firstEvent) return false;
+    if (prevRow.toolName !== nextRow.toolName) return false;
+    if (prevRow.count !== nextRow.count) return false;
+    if (prevRow.groupFirstIdx !== nextRow.groupFirstIdx) return false;
+    if (prevRow.isExpanded !== nextRow.isExpanded) return false;
+
+    return true;
+  }
+
+  return false;
+}
+
+const RowInner = memo(function RowInner({
   index,
   style,
+  ariaAttributes,
   rows,
   selectedIdx,
   sessionStartedAt,
@@ -219,24 +294,40 @@ const Row = memo(function Row({
   onToggleGroup,
 }: RowComponentProps<RowProps>) {
   const row = rows[index];
+
+  const eventIdx = row?.kind === "event" ? row.idx : undefined;
+  const groupFirstIdx = row?.kind === "groupHeader" ? row.groupFirstIdx : undefined;
+  const handleClick = useCallback(() => {
+    if (groupFirstIdx !== undefined) {
+      onToggleGroup(groupFirstIdx);
+      return;
+    }
+    if (eventIdx !== undefined) {
+      onSelect(eventIdx);
+    }
+  }, [eventIdx, groupFirstIdx, onSelect, onToggleGroup]);
+
   if (!row) return null;
 
   if (row.kind === "groupHeader") {
+    const [Icon, iconBg] = getIconParts(row.firstEvent);
     return (
-      <div style={style} role="listitem">
+      <div style={style} {...ariaAttributes} role="listitem">
         <RowView
           label="Tool"
           preview={`${row.toolName} x${row.count}`}
           time={formatElapsed(row.firstEvent.timestamp, sessionStartedAt)}
-          icon={getIcon(row.firstEvent)}
+          Icon={Icon}
+          iconBg={iconBg}
           isSelected={false}
-          onClick={() => onToggleGroup(row.groupFirstIdx)}
+          onClick={handleClick}
           chevron={row.isExpanded ? "expanded" : "collapsed"}
         />
       </div>
     );
   }
 
+  const [Icon, iconBg] = getIconParts(row.event);
   const label = row.labelOverride ?? getSingleLabel(row.event);
   const preview = row.labelOverride === "Tool"
     ? row.event.kind === "tool"
@@ -245,19 +336,24 @@ const Row = memo(function Row({
     : getSinglePreview(row.event);
 
   return (
-    <div style={style} role="listitem">
+    <div style={style} {...ariaAttributes} role="listitem">
       <RowView
         label={label}
         preview={preview}
         time={formatElapsed(row.event.timestamp, sessionStartedAt)}
-        icon={getIcon(row.event)}
+        Icon={Icon}
+        iconBg={iconBg}
         isSelected={row.idx === selectedIdx}
-        onClick={() => onSelect(row.idx)}
+        onClick={handleClick}
         indented={row.indented}
       />
     </div>
   );
-}, areEqual);
+}, areRowPropsEqual);
+
+function Row(props: RowComponentProps<RowProps>) {
+  return <RowInner {...props} />;
+}
 
 export function EventList({
   events,
