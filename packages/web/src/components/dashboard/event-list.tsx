@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { List, type RowComponentProps } from "react-window";
+import { useMemo, memo } from "react";
+import { List, type RowComponentProps, areEqual } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
   formatSlashCommandText,
@@ -149,7 +149,7 @@ type RowViewProps = {
   chevron?: "collapsed" | "expanded";
 };
 
-function RowView({
+const RowView = memo(function RowView({
   label,
   preview,
   time,
@@ -199,7 +199,7 @@ function RowView({
       </span>
     </button>
   );
-}
+});
 
 type RowProps = {
   rows: FlatRow[];
@@ -209,7 +209,7 @@ type RowProps = {
   onToggleGroup: (firstIdx: number) => void;
 };
 
-function Row({
+const Row = memo(function Row({
   index,
   style,
   rows,
@@ -257,7 +257,7 @@ function Row({
       />
     </div>
   );
-}
+}, areEqual);
 
 export function EventList({
   events,

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 interface StatListRowProps {
@@ -16,7 +16,7 @@ const toneStyles: Record<NonNullable<StatListRowProps['tone']>, string> = {
   muted: 'bg-muted',
 }
 
-export function StatListRow({
+export const StatListRow = memo(function StatListRow({
   icon,
   label,
   value,
@@ -52,7 +52,7 @@ export function StatListRow({
       </span>
     </div>
   )
-}
+})
 
 export function StatList({
   children,
