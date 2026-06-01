@@ -315,12 +315,13 @@ export async function transferProjectForUser(
         })
         throw e
       }
-      await tx.projectMember.deleteMany({ where: { projectId } })
-      return tx.project.update({
-        where: { id: projectId },
+      const updatedProject = await tx.project.update({
+        where: { id: projectId, orgId: project.orgId },
         data: { orgId: targetOrg.id },
         select: { id: true, orgId: true, name: true, slug: true, createdAt: true },
       })
+      await tx.projectMember.deleteMany({ where: { projectId } })
+      return updatedProject
     })
     return { kind: 'ok', project: { ...updated, orgSlug: targetOrg.slug } }
   } catch (err: unknown) {
@@ -344,6 +345,12 @@ export async function transferProjectForUser(
       ) {
         return { kind: 'slug_conflict' }
       }
+    }
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2025'
+    ) {
+      return { kind: 'forbidden' }
     }
     throw err
   }

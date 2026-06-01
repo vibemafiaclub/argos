@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { spawn } from 'child_process'
@@ -48,13 +48,16 @@ export interface SendEventBackgroundOpts {
  */
 export function buildSelfHealScript({
   tmpFile,
+  tmpDir,
   projectJsonPath,
 }: {
   tmpFile: string
+  tmpDir?: string
   projectJsonPath: string
 }): string {
   // Serialize paths as JSON so they are safely embedded in the script string.
   const tmpFileJson = JSON.stringify(tmpFile)
+  const tmpDirJson = tmpDir ? JSON.stringify(tmpDir) : 'null'
   const projectJsonPathJson = JSON.stringify(projectJsonPath)
 
   return [
@@ -75,24 +78,32 @@ export function buildSelfHealScript({
     `if(!body||!body.project||typeof body.project.id!=='string'||typeof body.project.orgId!=='string'||typeof body.project.orgSlug!=='string')return;`,
     // Step 5: Guard — must be for the same project (cross-project contamination check)
     `if(body.project.id!==currentConfig.projectId)return;`,
-    // Step 6: Re-read projectJsonPath (race protection for concurrent hooks)
+    // Step 6: Acquire a project-local lock before re-reading and rewriting.
+    // mkdirSync is atomic across processes and prevents concurrent self-heal
+    // writers from overwriting each other's updates between read and rename.
+    `const lockDir=${projectJsonPathJson}+'.lock';`,
+    `let locked=false;`,
+    `for(let i=0;i<20;i++){try{fs.mkdirSync(lockDir);locked=true;break;}catch(e){if(!e||e.code!=='EEXIST')return;await new Promise(r=>setTimeout(r,25));}}`,
+    `if(!locked)return;`,
+    `let atomicTmp;`,
+    `try{`,
+    // Step 7: Re-read projectJsonPath (race protection for concurrent hooks)
     `let latest;`,
     `try{latest=JSON.parse(fs.readFileSync(${projectJsonPathJson},'utf8'));}catch{return;}`,
-    // Step 7: Guard — projectId must still match after re-read
+    // Step 8: Guard — projectId must still match after re-read
     `if(latest.projectId!==body.project.id)return;`,
-    // Step 8: No-op if already up to date (idempotent)
+    // Step 9: No-op if already up to date (idempotent)
     `if(latest.orgId===body.project.orgId&&latest.orgSlug===body.project.orgSlug)return;`,
-    // Step 9: Merge new orgId/orgSlug, preserving all other fields and key order
+    // Step 10: Merge new orgId/orgSlug, preserving all other fields and key order
     `const updated={...latest,orgId:body.project.orgId,orgSlug:body.project.orgSlug};`,
-    // Step 10: Atomic write via tmp + renameSync
-    `const atomicTmp=${projectJsonPathJson}+'.tmp.'+process.pid+'.'+Math.random().toString(36).slice(2);`,
-    `try{`,
+    // Step 11: Atomic write via tmp + renameSync
+    `atomicTmp=${projectJsonPathJson}+'.tmp.'+process.pid+'.'+Math.random().toString(36).slice(2);`,
     `fs.writeFileSync(atomicTmp,JSON.stringify(updated,null,2),'utf8');`,
     `fs.renameSync(atomicTmp,${projectJsonPathJson});`,
-    `}catch{try{fs.unlinkSync(atomicTmp);}catch{}}`,
+    `}catch{try{if(atomicTmp)fs.unlinkSync(atomicTmp);}catch{}}finally{try{fs.rmdirSync(lockDir);}catch{}}`,
     `}catch{}`,
-    // Cleanup tmp file in finally (runs whether self-heal succeeded or any early return)
-    `finally{try{fs.unlinkSync(${tmpFileJson});}catch{}}`,
+    // Cleanup tmp file/dir in finally (runs whether self-heal succeeded or any early return)
+    `finally{try{fs.unlinkSync(${tmpFileJson});}catch{};if(${tmpDirJson})try{fs.rmSync(${tmpDirJson},{recursive:true,force:true});}catch{}}`,
     `})()`,
   ].join('')
 }
@@ -109,15 +120,17 @@ export function buildSelfHealScript({
 export function sendEventBackground(opts: SendEventBackgroundOpts): void {
   const { url, token, payload, projectJsonPath, currentConfig } = opts
 
-  const tmpFile = join(tmpdir(), `argos-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+  let tmpDir: string | undefined
   try {
+    tmpDir = mkdtempSync(join(tmpdir(), 'argos-'))
+    const tmpFile = join(tmpDir, 'payload.json')
     writeFileSync(
       tmpFile,
       JSON.stringify({ url, token, payload, projectJsonPath, currentConfig }),
       'utf8',
     )
 
-    const script = buildSelfHealScript({ tmpFile, projectJsonPath })
+    const script = buildSelfHealScript({ tmpFile, tmpDir, projectJsonPath })
 
     const child = spawn(process.execPath, ['-e', script], {
       detached: true,
@@ -125,6 +138,8 @@ export function sendEventBackground(opts: SendEventBackgroundOpts): void {
     })
     child.unref()
   } catch {
-    try { if (existsSync(tmpFile)) unlinkSync(tmpFile) } catch {}
+    try {
+      if (tmpDir) rmSync(tmpDir, { recursive: true, force: true })
+    } catch {}
   }
 }
