@@ -30,7 +30,6 @@ export const IngestEventSchema = z.object({
   sessionId: z.string(),
   projectId: z.string(),
   hookEventName: EventTypeEnum,
-  agent: z.enum(['CLAUDE', 'CODEX']).optional(),
   toolName: z.string().optional(),
   toolInput: z.record(z.unknown()).optional(),
   toolResponse: z.string().optional(),

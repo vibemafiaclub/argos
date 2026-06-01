@@ -1,13 +1,12 @@
 'use client'
 
-import { useMemo, useState, useRef } from 'react'
+import { useMemo, useState, useRef, type CSSProperties } from 'react'
 import {
   formatSlashCommandText,
   buildTimelineGroups,
   type TimelineEvent,
 } from '@/lib/timeline-events'
 import { formatTokens, formatCost, formatRelativeTime } from '@/lib/format'
-import { segmentVisuals } from './session-ribbon-visuals'
 
 type Props = {
   events: TimelineEvent[]
@@ -28,6 +27,20 @@ type HoverState =
       firstEvent: TimelineEvent
       x: number
     }
+
+function segmentVisuals(event: TimelineEvent): {
+  bg: string
+  style: CSSProperties
+} {
+  if (event.kind === 'message' && event.role === 'HUMAN') {
+    return { bg: 'bg-brand', style: { flex: '0 0 3px' } }
+  }
+  if (event.kind === 'message' && event.role === 'ASSISTANT') {
+    const grow = Math.max(event.outputTokens, 1)
+    return { bg: 'bg-brand-2', style: { flex: `${grow} 0 6px` } }
+  }
+  return { bg: 'bg-muted-foreground', style: { flex: '0 0 8px' } }
+}
 
 function EventTooltipBody({
   event,
@@ -287,7 +300,7 @@ export function SessionActivityRibbon({
         )}
         onMouseLeave={() => setHover(null)}
         aria-label={`${group.toolName} x${group.items.length}`}
-        className={`relative h-full ${segmentVisuals(group.items[0].event).bg} transition-opacity hover:opacity-70`}
+        className="relative h-full bg-muted-foreground transition-opacity hover:opacity-70"
       >
         <span className="pointer-events-none absolute inset-y-1 left-1/2 -translate-x-1/2 w-px bg-background/50" />
       </button>,

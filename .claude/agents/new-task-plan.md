@@ -24,12 +24,6 @@ model: inherit
    3. 비평 Read → plan 수정. **수정 시 plan 본문 끝의 "Critique Reflection" 섹션에 항목별 반영/거절 + 사유를 기록한다.** 같은 지적이 반복되지 않게 함.
    4. **종료 조건 (둘 중 하나라도)**: (a) 새 critique 에 `critical` 항목이 없음. (b) plan 작성 너 스스로 "더 비평할 가치 없음" 판단. 셋 다 못 만나면 3회 후 종료.
 4. **최종 plan 확정**. Critique Reflection 섹션에 종료 사유 1줄 명시.
-4.5. **제출 직전 self-cross-check (1~2분)**. 본문의 산문 주장과 본인이 쓴 스니펫/표가 실제로 같은 것을 가리키는지 다음 4축으로 grep 검증:
-   - (a) **부등호·비율·임계값 방향**: "X 가 Y 의 1.2배 이내" 같은 비교식이 실제 부등호 방향과 맞는가 (좌변·우변 헷갈리기 쉬움).
-   - (b) **CTE/함수 재사용 주장**: "X 를 재사용한다" 고 적었으면 본인이 쓴 SQL/코드에서 정말 X 를 from 절·import 로 참조하는가 (인라인 복제 아님).
-   - (c) **Decision-N 교차참조**: 본문에서 "Decision-N" 을 인용했으면 그 N 번이 실제 결정 번호인가 (편집 중 번호 시프트로 어긋나기 쉬움).
-   - (d) **라이브러리 API prop 위치**: "X prop 은 Component.Y 에 붙는다" 고 두 곳 이상에서 언급했으면 두 위치가 같은 컴포넌트를 가리키는가.
-   - 모순 발견 시 본문 수정 후 다음 단계로. 이 self-check 가 critique 의 minor/major 1~3건을 사전 흡수해 critique 루프 수를 줄인다.
 5. 메인에 반환: plan 파일 경로 + 6~10줄 요약 (work unit 개수, 병렬 그룹 수, 주요 리스크 1~2개).
 
 ## plan 스키마 (`docs/tasks/<task_slug>/03-plan.md`)
@@ -97,7 +91,7 @@ model: inherit
 codex CLI 는 별도 프로세스에서 plan 을 비평한다. 호출 예:
 
 ```bash
-codex exec --skip-git-repo-check --sandbox read-only "다음 plan 을 비평해줘. 입력 파일: docs/tasks/<slug>/01-clarify.md, docs/tasks/<slug>/02-context.md, docs/tasks/<slug>/03-plan.md. 결과를 docs/tasks/<slug>/03-plan-critique-<N>.md 에 저장. 비평 형식: 각 이슈에 severity(critical|major|minor) + 위치(plan 섹션) + 한 줄 설명 + 권고 수정. critical 이 없으면 그렇다고 명시. plan 의 work unit 분할, 병렬 그룹의 파일 충돌, Decision Log 의 근거 충분성, 검증 시나리오의 누락 여부, 그리고 동일 의미값(색·토큰·분류 술어 등)이 helper/JSX/CSS 등 여러 위치에 하드코딩돼 단일 출처가 깨지는지에 특히 집중."
+codex exec --skip-git-repo-check --sandbox read-only "다음 plan 을 비평해줘. 입력 파일: docs/tasks/<slug>/01-clarify.md, docs/tasks/<slug>/02-context.md, docs/tasks/<slug>/03-plan.md. 결과를 docs/tasks/<slug>/03-plan-critique-<N>.md 에 저장. 비평 형식: 각 이슈에 severity(critical|major|minor) + 위치(plan 섹션) + 한 줄 설명 + 권고 수정. critical 이 없으면 그렇다고 명시. plan 의 work unit 분할, 병렬 그룹의 파일 충돌, Decision Log 의 근거 충분성, 검증 시나리오의 누락 여부에 특히 집중."
 ```
 
 - 비평 파일이 만들어졌는지 `ls` 로 확인 후 Read.

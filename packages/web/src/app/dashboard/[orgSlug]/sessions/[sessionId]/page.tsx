@@ -7,7 +7,6 @@ import { EventList } from '@/components/dashboard/event-list'
 import { EventDetail } from '@/components/dashboard/event-detail'
 import { SessionTimelineChart } from '@/components/dashboard/session-timeline-chart'
 import { SessionActivityRibbon } from '@/components/dashboard/session-activity-ribbon'
-import { AgentBadge } from '@/components/dashboard/agent-badge'
 import {
   SessionFilesSummary,
   SessionFilesTab,
@@ -189,8 +188,7 @@ export default function OrgSessionDetailPage({
       </header>
 
       <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <AgentBadge agent={data.agent} />
+        <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <span>{data.userName}</span>
           <span>·</span>
           <span>In {formatTokens(data.inputTokens)}</span>

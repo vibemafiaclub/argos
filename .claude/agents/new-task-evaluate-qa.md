@@ -17,7 +17,6 @@ model: inherit
 
 1. `git diff <base>..HEAD --stat` 로 변경 파일 범위 확인 (`<base>` 는 메인이 알려주지 않으면 `main` 또는 `HEAD~1` 시도).
 2. plan 의 QA 시나리오 Read. 각 시나리오를 실행 단위로 분해.
-2.5. **환경 의존 사전점검**: plan 의 QA 시나리오에 DB / 인증 / 외부 API 호출이 포함되면, 앱을 띄우기 전에 `.env` / credentials / 네트워크 상태를 확인한다. 누락이면 해당 시나리오를 `blocked` 로 분류하고 사유 (예: "로컬 .env 부재로 DB 접속 불가") 를 미리 메모. 그 외 시나리오는 정상 진행. 가능하면 자동 단위/정적 검증으로 동일 의도를 간접 가드.
 3. **앱 기동**:
    - 모노레포 dev 서버: `pnpm dev` (또는 패키지별 dev script). plan 에 별도 명령 있으면 그쪽 따름.
    - 백그라운드로 띄우고 로그 tail. 포트 충돌 시 다른 포트로 재시도.
@@ -39,17 +38,9 @@ model: inherit
 
 | # | 시나리오 | 결과 | 심각도 | 메모 |
 |---|---------|------|--------|------|
-| 1 | 로그인 → 대시보드 진입 | pass(runtime) | - | - |
-| 2 | 비어있는 목록 상태에서 신규 추가 | fail(runtime) | major | 토스트 alert 가 노출되지 않음 |
-| 3 | 키보드 a11y 흐름 | pass(static) | - | 헤드리스 driver 부재 — 컴포넌트 코드 검토로 검증 |
-| 4 | ... | blocked | - | env 미설정 등 사유 |
-
-결과 라벨 규약:
-- `pass(runtime)` / `fail(runtime)`: 실제 앱 기동 후 동작/응답으로 검증.
-- `pass(static)` / `fail(static)`: 헤드리스 브라우저·driver 부재로 컴포넌트 코드 검토·grep 으로 갈음한 검증. 시각 회귀·실제 이벤트 흐름은 잡을 수 없으므로 항상 "메모" 에 갈음 사유 1줄.
-- `blocked`: 환경·시드·credentials 부재로 실행 불가. 사유 명시.
-
-총괄 보고는 `pass(runtime) X / pass(static) Y / fail Z / blocked B` 로 분리 표기. 같은 pass 안에서도 분포가 보이도록.
+| 1 | 로그인 → 대시보드 진입 | pass | - | - |
+| 2 | 비어있는 목록 상태에서 신규 추가 | fail | major | 토스트 alert 가 노출되지 않음 |
+| 3 | ... | | | |
 
 ## 발견 이슈 (사용자 반영 선택용)
 

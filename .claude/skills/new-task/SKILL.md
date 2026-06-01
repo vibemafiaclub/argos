@@ -144,11 +144,10 @@ ADR background 가 아직 안 끝났으면, 메인은 그냥 evaluate 두 개를
 
 1. **Code Review** (headless claude code):
    - Bash 로 `claude -p "/review"` 를 실행. 작업 디렉토리에서 실행되며, `/review` 가 변경분을 자동 인식.
-   - **반드시 절대 경로 + 절대 binary 로 실행**. `claude` 는 사용자 shell 의 alias 라 비대화형 Bash 에서는 동작하지 않는다. 또한 메인 세션의 cwd 가 이전 단계에서 `cd packages/<pkg>` 등으로 변경됐을 수 있으므로 출력 리다이렉트도 절대 경로로 적는다. 명령 예:
+   - 출력을 `docs/tasks/<slug>/05-review.md` 에 저장. 명령 예:
      ```bash
-     /Users/<user>/.claude/local/claude -p "/review. 추가로 docs/adr.md 의 task:<task_slug> 태그가 붙은 신규 ADR 들과 일관성도 점검해줘. 결과 텍스트만 출력해줘 (마크다운)." > /Users/<user>/Desktop/dev/vmc/argos/docs/tasks/<task_slug>/05-review.md
+     claude -p "/review. 추가로 docs/adr.md 의 task:<task_slug> 태그가 붙은 신규 ADR 들과 일관성도 점검해줘. 결과 텍스트만 출력해줘 (마크다운)." > docs/tasks/<task_slug>/05-review.md
      ```
-     `which claude` 로 실제 binary 경로를 한 번 확인해서 박는다 (alias 가 가리키는 실제 파일).
 2. **QA**: `Agent` tool `subagent_type="new-task-evaluate-qa"`. 입력: `task_slug`, `plan_path`, `clarify_path`.
 
 ### Evaluate 입력 컨텍스트 최적화
@@ -191,25 +190,9 @@ evaluate 두 결과 + ADR 완료까지 모두 join 되면 메인이 사용자에
 - 사용자가 "1,3 반영" 같이 답하면 **메인 세션이 직접** 해당 이슈를 처리 (가장 깊은 컨텍스트가 메인이므로 — 별도 세션 띄우지 말 것).
 - 사용자가 "스킵" / "다 무시" / "끝" 하면 다음 단계로.
 
-## Step 6 — UC 카탈로그 승격 (foreground)
-
-사용자 이슈 반영(또는 스킵) 직후, 메인이 UC 승격 sub-agent 를 **foreground** 로 호출한다. background 가 아닌 이유: NEW vs UPDATE vs SUPERSEDE 판정에 메인의 1~2줄 답이 필요할 수 있고, 이 단계 이후 곧장 세션 종료이기 때문.
-
-```
-Agent({
-  subagent_type: "new-task-usecase",
-  prompt: task_slug, clarify_path, plan_path, evaluate_path 전달
-})
-```
-
-- 산출: `docs/usecases/<domain>/UC-<DOMAIN>-NNN-...md` (신규) 또는 기존 UC 본문 업데이트, `docs/usecases/_ids.yaml` 갱신.
-- 메인은 5~10줄 요약만 받는다 (어떤 UC 가 NEW/UPDATE/SUPERSEDE 됐는지 + 미해결 질문).
-- sub-agent 가 분류 모호함을 메인에 물으면 메인이 사용자에게 한 줄로 옮겨 답을 받아 sub-agent 를 followup 호출.
-- 카탈로그 규약 (`docs/usecases/README.md`) 의 시나리오 단계 작성 규칙은 sub-agent 가 알아서 lint·수정.
-
 ## 파이프라인 자기개선 (background, 마지막)
 
-UC 승격이 끝난 직후, 메인이 background sub-agent 를 띄운다:
+사용자 결정(반영 또는 스킵)이 끝난 직후, 메인이 background sub-agent 를 띄운다:
 
 ```
 Agent({
@@ -243,8 +226,6 @@ docs/tasks/<slug>/
   05-qa.md
   _pipeline-improvements.md    # background 산출
 docs/adr.md                    # ADR append
-docs/usecases/<domain>/UC-*.md # UC 승격으로 생성/갱신
-docs/usecases/_ids.yaml        # UC 레지스트리 갱신
 .claude/state/active-task      # 진행 중일 때만 존재
 ```
 

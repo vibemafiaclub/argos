@@ -40,7 +40,7 @@ export async function GET(
 
     const rollups = await getDailyRollupsForProjects(projectIds, from, to)
 
-    const agg = aggregateSummary(rollups, { topSkillsN: 10 })
+    const agg = aggregateSummary(rollups, 5)
     const summary: DashboardSummary = {
       sessionCount: agg.sessionCount,
       turnCount: agg.turnCount,

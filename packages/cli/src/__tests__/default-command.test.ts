@@ -41,7 +41,6 @@ function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
     },
     project: {
       find: vi.fn().mockReturnValue(MOCK_PROJECT),
-      findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: '/test/cwd/.argos/project.json' }),
       write: vi.fn(),
     },
     auth: {
@@ -87,7 +86,7 @@ describe('makeDefaultCommand', () => {
     it('deps.auth.login 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.auth.login).toHaveBeenCalled()
@@ -96,7 +95,7 @@ describe('makeDefaultCommand', () => {
     it('deps.config.write 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.config.write).toHaveBeenCalled()
@@ -105,7 +104,7 @@ describe('makeDefaultCommand', () => {
     it('deps.api.createProject 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.api.createProject).toHaveBeenCalled()
@@ -114,7 +113,7 @@ describe('makeDefaultCommand', () => {
     it('deps.project.write 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.project.write).toHaveBeenCalled()
@@ -123,7 +122,7 @@ describe('makeDefaultCommand', () => {
     it('deps.hooks.inject 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.hooks.inject).toHaveBeenCalled()
@@ -134,7 +133,7 @@ describe('makeDefaultCommand', () => {
     it('deps.auth.login 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: '/test/cwd/.argos/project.json' }), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.auth.login).toHaveBeenCalled()
@@ -143,7 +142,7 @@ describe('makeDefaultCommand', () => {
     it('deps.api.joinOrg 이 project.orgSlug 인자와 함께 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: '/test/cwd/.argos/project.json' }), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.api.joinOrg).toHaveBeenCalledWith(
@@ -156,7 +155,7 @@ describe('makeDefaultCommand', () => {
     it('deps.config.write 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: '/test/cwd/.argos/project.json' }), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.config.write).toHaveBeenCalled()
@@ -165,7 +164,7 @@ describe('makeDefaultCommand', () => {
     it('deps.api.createProject 이 호출되지 않는다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: '/test/cwd/.argos/project.json' }), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(MOCK_PROJECT), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.api.createProject).not.toHaveBeenCalled()
@@ -175,7 +174,7 @@ describe('makeDefaultCommand', () => {
       const legacyProject = { ...MOCK_PROJECT, orgSlug: undefined } as unknown as typeof MOCK_PROJECT
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(null), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(legacyProject), findWithPath: vi.fn().mockReturnValue({ config: legacyProject, configPath: '/test/cwd/.argos/project.json' }), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(legacyProject), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.api.joinOrg).toHaveBeenCalledWith(
@@ -190,7 +189,7 @@ describe('makeDefaultCommand', () => {
     it('deps.auth.login 이 호출되지 않는다 (이미 로그인)', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(MOCK_CONFIG), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.auth.login).not.toHaveBeenCalled()
@@ -199,7 +198,7 @@ describe('makeDefaultCommand', () => {
     it('deps.api.createProject 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(MOCK_CONFIG), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.api.createProject).toHaveBeenCalled()
@@ -208,7 +207,7 @@ describe('makeDefaultCommand', () => {
     it('deps.project.write 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(MOCK_CONFIG), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.project.write).toHaveBeenCalled()
@@ -217,7 +216,7 @@ describe('makeDefaultCommand', () => {
     it('deps.hooks.inject 이 호출된다', async () => {
       const deps = makeMockDeps({
         config: { read: vi.fn().mockReturnValue(MOCK_CONFIG), write: vi.fn(), delete: vi.fn() },
-        project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.hooks.inject).toHaveBeenCalled()
@@ -234,7 +233,7 @@ describe('makeDefaultCommand', () => {
     it('orgSlug 누락된 legacy project.json 에서는 orgId 로 ensureMembership 이 호출된다', async () => {
       const legacyProject = { ...MOCK_PROJECT, orgSlug: undefined } as unknown as typeof MOCK_PROJECT
       const deps = makeMockDeps({
-        project: { find: vi.fn().mockReturnValue(legacyProject), findWithPath: vi.fn().mockReturnValue({ config: legacyProject, configPath: '/test/cwd/.argos/project.json' }), write: vi.fn() },
+        project: { find: vi.fn().mockReturnValue(legacyProject), write: vi.fn() },
       })
       await makeDefaultCommand(deps)({})
       expect(deps.api.ensureMembership).toHaveBeenCalledWith(

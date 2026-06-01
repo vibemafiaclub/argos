@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-import { convertEventType, buildPayload, makeHookCommand, detectAgent } from '../commands/hook.js'
+import { convertEventType, buildPayload, makeHookCommand } from '../commands/hook.js'
 import type { ExternalDeps } from '../deps.js'
 
 // ---------------------------------------------------------------------------
@@ -130,18 +130,12 @@ function setStdin(stream: Readable) {
   Object.defineProperty(process, 'stdin', { value: stream, writable: true, configurable: true })
 }
 
-const MOCK_PROJECT_JSON_PATH = '/test/cwd/.argos/project.json'
-
 function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
   const sendBackground = vi.fn()
   const extractUsage = vi.fn().mockResolvedValue(null)
-  const extractUsagePerTurn = vi.fn().mockResolvedValue([])
   const detectSlashCommand = vi.fn().mockResolvedValue(null)
   const extractMessages = vi.fn().mockResolvedValue([])
   const extractSummary = vi.fn().mockResolvedValue(null)
-  const extractUsageCodex = vi.fn().mockResolvedValue(null)
-  const extractUsagePerTurnCodex = vi.fn().mockResolvedValue([])
-  const extractMessagesCodex = vi.fn().mockResolvedValue([])
 
   return {
     config: {
@@ -151,7 +145,6 @@ function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
     },
     project: {
       find: vi.fn().mockReturnValue(MOCK_PROJECT),
-      findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: MOCK_PROJECT_JSON_PATH }),
       write: vi.fn(),
     },
     auth: {
@@ -173,13 +166,9 @@ function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
     },
     transcript: {
       extractUsage,
-      extractUsagePerTurn,
       detectSlashCommand,
       extractMessages,
       extractSummary,
-      extractUsageCodex,
-      extractUsagePerTurnCodex,
-      extractMessagesCodex,
     },
     events: {
       sendBackground,
@@ -225,7 +214,7 @@ describe('makeHookCommand orchestration', () => {
 
   it('exits 0 immediately when project config is missing', async () => {
     const deps = makeMockDeps({
-      project: { find: vi.fn().mockReturnValue(null), findWithPath: vi.fn().mockReturnValue(null), write: vi.fn() },
+      project: { find: vi.fn().mockReturnValue(null), write: vi.fn() },
     })
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'Stop', session_id: 'x' })))
 
@@ -250,24 +239,6 @@ describe('makeHookCommand orchestration', () => {
     setStdin(makeStdin(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'x' })))
     await makeHookCommand(deps)({})
     expect(deps.events.sendBackground).toHaveBeenCalled()
-  })
-
-  it('passes projectJsonPath and currentConfig to sendBackground for self-heal', async () => {
-    const deps = makeMockDeps()
-    setStdin(makeStdin(JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'x' })))
-    await makeHookCommand(deps)({})
-    expect(deps.events.sendBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: 'https://api.example.com/api/events',
-        token: MOCK_CONFIG.token,
-        projectJsonPath: MOCK_PROJECT_JSON_PATH,
-        currentConfig: expect.objectContaining({
-          projectId: MOCK_PROJECT.projectId,
-          orgId: MOCK_PROJECT.orgId,
-          orgSlug: MOCK_PROJECT.orgSlug,
-        }),
-      })
-    )
   })
 
   it('calls extractUsage and extractMessages for Stop event', async () => {
@@ -354,9 +325,6 @@ describe('makeHookCommand orchestration', () => {
         detectSlashCommand: vi.fn().mockResolvedValue('new-task-doc'),
         extractMessages: vi.fn().mockResolvedValue([]),
         extractSummary: vi.fn().mockResolvedValue(null),
-        extractUsageCodex: vi.fn().mockResolvedValue(null),
-        extractUsagePerTurnCodex: vi.fn().mockResolvedValue([]),
-        extractMessagesCodex: vi.fn().mockResolvedValue([]),
       },
     })
     const transcriptPath = join(tempDir, 'transcript.jsonl')
@@ -374,15 +342,13 @@ describe('makeHookCommand orchestration', () => {
     await makeHookCommand(deps)({})
 
     expect(deps.events.sendBackground).toHaveBeenCalledWith(
+      'https://api.example.com/api/events',
+      MOCK_CONFIG.token,
       expect.objectContaining({
-        url: 'https://api.example.com/api/events',
-        token: MOCK_CONFIG.token,
-        payload: expect.objectContaining({
-          hookEventName: 'SESSION_START',
-          isSlashCommand: true,
-          toolName: 'Skill',
-          toolInput: { skill: 'new-task-doc' },
-        }),
+        hookEventName: 'SESSION_START',
+        isSlashCommand: true,
+        toolName: 'Skill',
+        toolInput: { skill: 'new-task-doc' },
       })
     )
   })
@@ -403,7 +369,6 @@ describe('makeHookCommand orchestration', () => {
     const deps = makeMockDeps({
       project: {
         find: vi.fn().mockImplementation(() => { throw new Error('unexpected failure') }),
-        findWithPath: vi.fn().mockImplementation(() => { throw new Error('unexpected failure') }),
         write: vi.fn(),
       },
     })
@@ -411,73 +376,5 @@ describe('makeHookCommand orchestration', () => {
 
     await makeHookCommand(deps)({})
     expect(process.exit).toHaveBeenCalledWith(0)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// detectAgent
-// ---------------------------------------------------------------------------
-describe('detectAgent', () => {
-  it('explicit --agent flag wins', () => {
-    expect(detectAgent({ agent: 'codex' }, {})).toBe('codex')
-    expect(detectAgent({ agent: 'claude' }, { transcript_path: '/x/.codex/sessions/a.jsonl' })).toBe('claude')
-  })
-
-  it('infers codex from transcript_path containing /.codex/', () => {
-    expect(detectAgent({}, { transcript_path: '/Users/x/.codex/sessions/2026/05/r.jsonl' })).toBe('codex')
-    expect(detectAgent({}, { agent_transcript_path: '/Users/x/.codex/sessions/r.jsonl' })).toBe('codex')
-  })
-
-  it('defaults to claude', () => {
-    expect(detectAgent({}, {})).toBe('claude')
-    expect(detectAgent({}, { transcript_path: '/Users/x/.claude/projects/p/t.jsonl' })).toBe('claude')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// makeHookCommand — Codex agent branch
-// ---------------------------------------------------------------------------
-describe('makeHookCommand Codex branch', () => {
-  let originalStdin: NodeJS.ReadStream
-  beforeEach(() => {
-    originalStdin = process.stdin
-    vi.spyOn(process, 'exit').mockImplementation((() => {}) as never)
-  })
-  afterEach(() => {
-    Object.defineProperty(process, 'stdin', { value: originalStdin, writable: true, configurable: true })
-    vi.clearAllMocks()
-  })
-
-  it('Stop with --agent codex uses the Codex parser, not the Claude one', async () => {
-    const deps = makeMockDeps()
-    deps.transcript.extractUsageCodex = vi.fn().mockResolvedValue({
-      inputTokens: 100, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 50, model: undefined,
-    })
-    deps.transcript.extractMessagesCodex = vi.fn().mockResolvedValue([])
-    setStdin(makeStdin(JSON.stringify({
-      hook_event_name: 'Stop', session_id: 'x', model: 'gpt-5.5',
-      transcript_path: '/Users/x/.codex/sessions/r.jsonl',
-    })))
-
-    await makeHookCommand(deps)({ agent: 'codex' })
-
-    expect(deps.transcript.extractUsageCodex).toHaveBeenCalled()
-    expect(deps.transcript.extractUsage).not.toHaveBeenCalled()
-    // model 이 transcript 에 없으면 hook stdin 의 model 로 보강
-    const sent = (deps.events.sendBackground as ReturnType<typeof vi.fn>).mock.calls[0][0]
-    expect(sent.payload.usage.model).toBe('gpt-5.5')
-  })
-
-  it('Codex SessionStart does not attempt Claude slash detection', async () => {
-    const deps = makeMockDeps()
-    setStdin(makeStdin(JSON.stringify({
-      hook_event_name: 'SessionStart', session_id: 'x',
-      transcript_path: '/Users/x/.codex/sessions/r.jsonl',
-    })))
-
-    await makeHookCommand(deps)({ agent: 'codex' })
-
-    expect(deps.transcript.detectSlashCommand).not.toHaveBeenCalled()
-    expect(deps.events.sendBackground).toHaveBeenCalled()
   })
 })

@@ -5,10 +5,6 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
   DIRECT_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
-  ADMIN_USERNAME: z.string().min(1).max(128).refine((value) => !value.includes('.'), {
-    message: 'ADMIN_USERNAME must not contain "."',
-  }),
-  ADMIN_PASSWORD: z.string().min(16).max(512),
 })
 
 export const env = EnvSchema.parse(process.env)

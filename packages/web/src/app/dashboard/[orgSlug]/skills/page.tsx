@@ -1,13 +1,12 @@
 'use client'
 
 import { Suspense } from 'react'
-import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { subDays, format, differenceInDays } from 'date-fns'
 import { DateRangePicker } from '@/components/dashboard/date-range-picker'
 import { RankedBarChart } from '@/components/dashboard/ranked-bar-chart'
 import { ChartCard } from '@/components/dashboard/chart-card'
 import { KpiCard } from '@/components/dashboard/kpi-card'
-import { SkillProjectsCell } from '@/components/dashboard/skill-projects-cell'
 import { useDashboardSkills } from '@/hooks/use-dashboard-skills'
 import { formatDateTimeFull, formatLastUsed, formatDurationMs } from '@/lib/format'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -23,22 +22,11 @@ function SkillsContent({
   projectId: string | undefined
 }) {
   const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
   const today = new Date()
   const sevenDaysAgo = subDays(today, 7)
 
   const from = searchParams.get('from') || format(sevenDaysAgo, 'yyyy-MM-dd')
   const to = searchParams.get('to') || format(today, 'yyyy-MM-dd')
-
-  const isProjectFiltered = Boolean(projectId)
-
-  const setProjectIdQuery = (id: string) => {
-    const params = new URLSearchParams(searchParams.toString())
-    params.set('projectId', id)
-    const qs = params.toString()
-    router.push(qs ? `${pathname}?${qs}` : pathname)
-  }
 
   const { data, isLoading, error, refetch } = useDashboardSkills(orgSlug, {
     projectId,
@@ -155,14 +143,6 @@ function SkillsContent({
                     <InfoTooltip content="집계 기간 내 이 skill을 한 번이라도 호출한 distinct user_id 수. events의 Skill 호출과 transcript 메시지의 slash command 태그를 함께 집계합니다." />
                   </span>
                 </th>
-                <th className="text-left py-3 px-4 font-medium whitespace-nowrap">
-                  <span className="inline-flex items-center gap-1">
-                    Projects
-                    {isProjectFiltered && (
-                      <InfoTooltip content="Filtered to one project" />
-                    )}
-                  </span>
-                </th>
                 <th className="text-right py-3 px-4 font-medium whitespace-nowrap">
                   <span className="inline-flex items-center gap-1">
                     Median duration
@@ -183,14 +163,6 @@ function SkillsContent({
                   <td className="text-right py-3 px-4 tabular-nums">{skill.callCount.toLocaleString()}</td>
                   <td className="text-right py-3 px-4 tabular-nums">{skill.sessionCount.toLocaleString()}</td>
                   <td className="text-right py-3 px-4 tabular-nums">{skill.userCount.toLocaleString()}</td>
-                  <td className="py-3 px-4">
-                    <SkillProjectsCell
-                      projects={skill.projects}
-                      additionalProjectCount={skill.additionalProjectCount}
-                      isProjectFiltered={isProjectFiltered}
-                      onSelectProject={setProjectIdQuery}
-                    />
-                  </td>
                   <td className="text-right py-3 px-4 tabular-nums">
                     {skill.medianDurationMs != null ? formatDurationMs(skill.medianDurationMs) : '—'}
                   </td>

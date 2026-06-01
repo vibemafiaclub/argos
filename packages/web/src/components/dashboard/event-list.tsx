@@ -1,4 +1,4 @@
-import { useMemo, memo, type ReactElement } from "react";
+import { useMemo, memo } from "react";
 import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
@@ -52,6 +52,7 @@ function formatElapsed(timestamp: string, sessionStartedAt: string): string {
 function buildFlatRows(
   events: TimelineEvent[],
   expandedGroups: Set<number>,
+  selectedIdx: number,
 ): FlatRow[] {
   const groups = buildTimelineGroups(events);
   const rows: FlatRow[] = [];
@@ -79,7 +80,9 @@ function buildFlatRows(
       continue;
     }
     const firstIdx = group.items[0].idx;
-    const isExpanded = expandedGroups.has(firstIdx);
+    const lastIdx = group.items[group.items.length - 1].idx;
+    const containsSelected = selectedIdx >= firstIdx && selectedIdx <= lastIdx;
+    const isExpanded = expandedGroups.has(firstIdx) || containsSelected;
     rows.push({
       kind: "groupHeader",
       key: `gh-${firstIdx}`,
@@ -214,7 +217,7 @@ function Row({
   sessionStartedAt,
   onSelect,
   onToggleGroup,
-}: RowComponentProps<RowProps>): ReactElement | null {
+}: RowComponentProps<RowProps>) {
   const row = rows[index];
   if (!row) return null;
 
@@ -274,7 +277,7 @@ const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   if (prevIsSelected !== nextIsSelected) return false;
 
   return true;
-}) as unknown as typeof Row;
+});
 
 export function EventList({
   events,
@@ -285,8 +288,8 @@ export function EventList({
   onToggleGroup,
 }: EventListProps) {
   const rows = useMemo(
-    () => buildFlatRows(events, expandedGroups),
-    [events, expandedGroups],
+    () => buildFlatRows(events, expandedGroups, selectedIdx),
+    [events, expandedGroups, selectedIdx],
   );
 
   if (events.length === 0) {
@@ -299,7 +302,8 @@ export function EventList({
 
   return (
     <List
-      rowComponent={MemoizedRow}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rowComponent={MemoizedRow as any}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{

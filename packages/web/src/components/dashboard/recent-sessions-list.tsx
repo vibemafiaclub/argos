@@ -2,7 +2,6 @@
 
 import Link from 'next/link'
 import { formatTokens, formatRelativeTime } from '@/lib/format'
-import { AgentBadge } from './agent-badge'
 import type { SessionItem } from '@argos/shared'
 
 interface RecentSessionsListProps {
@@ -43,7 +42,6 @@ export function RecentSessionsList({ sessions, orgSlug }: RecentSessionsListProp
                 <span>{formatTokens(totalTokens)} tokens</span>
                 <span>·</span>
                 <span>{s.eventCount} events</span>
-                {s.agent === 'CODEX' && <AgentBadge agent={s.agent} className="ml-auto" />}
               </div>
             </Link>
           </li>

@@ -21,14 +21,3 @@ export interface CreateProjectResponse {
   projectName: string
   projectSlug: string
 }
-
-export interface TransferProjectResponse {
-  project: {
-    id: string
-    orgId: string
-    orgSlug: string
-    name: string
-    slug: string
-    createdAt: string
-  }
-}

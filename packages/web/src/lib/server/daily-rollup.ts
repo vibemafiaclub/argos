@@ -1,15 +1,5 @@
 import { Prisma } from '@prisma/client'
-import { aggregateSkillCountsForRange } from './skill-aggregation'
 import { db } from './db'
-
-// ─── Cache invalidation threshold ─────────────────────────────────────────────
-// 이 시각 이전에 계산된 daily rollup 은 skillCounts 가 구 정의(events.isSkillCall=true only)로
-// 채워져 있으므로 stale 판정 → 자동 재계산 (lazy invalidation).
-// PR merge + 충분한 여유(24h)로 설정한다.
-// NOTE: 다음 skillCounts 정의 변경 시 이 상수를 갱신하고 재배포한다.
-// 배포 race 가드: 머지·rolling deploy + 캐시 전파 슬립을 흡수하도록 머지 시각보다
-// 충분히 미래로 둔다 (배포 슬립 24~48h). 임계 이전 row 는 stale 판정 → 자연 재계산.
-export const SKILL_COUNTS_INVALIDATION_AT = new Date('2026-05-17T00:00:00Z')
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -61,16 +51,6 @@ function utcDayEnd(date: Date): Date {
     date.getUTCMonth(),
     date.getUTCDate(),
     23, 59, 59, 999,
-  ))
-}
-
-/** half-open 경계용: date 의 UTC 다음날 자정 (toExclusive = utcDayStart + 1day) */
-function utcDayStartNextDay(date: Date): Date {
-  return new Date(Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth(),
-    date.getUTCDate() + 1,
-    0, 0, 0, 0,
   ))
 }
 
@@ -128,14 +108,12 @@ async function computeDailyRollupCachedForToday(
 async function computeDailyRollup(projectId: string, date: Date): Promise<DailyRollup> {
   const from = utcDayStart(date)
   const to = utcDayEnd(date)
-  // half-open 경계: helper 는 [fromInclusive, toExclusive) を 要求
-  const toExclusive = utcDayStartNextDay(date)
 
   const [
     sessionCount,
     turnCount,
     usageTotals,
-    skillCountRows,
+    skillGroups,
     agentGroups,
     modelGroups,
     userStatsRaw,
@@ -169,9 +147,16 @@ async function computeDailyRollup(projectId: string, date: Date): Promise<DailyR
         AND timestamp >= ${from}
         AND timestamp <= ${to}
     `,
-    // UNION 정의 (events.isSkillCall=true ∪ messages slash commands, anti-join 중복 제거)
-    // skill-aggregation.ts 가 단일 출처 (skills route 와 공유)
-    aggregateSkillCountsForRange([projectId], from, toExclusive),
+    db.event.groupBy({
+      by: ['skillName'],
+      where: {
+        projectId,
+        isSkillCall: true,
+        skillName: { not: null },
+        timestamp: { gte: from, lte: to },
+      },
+      _count: { id: true },
+    }),
     db.event.groupBy({
       by: ['agentType'],
       where: {
@@ -267,10 +252,9 @@ async function computeDailyRollup(projectId: string, date: Date): Promise<DailyR
   const totals = usageTotals[0]
   const activeUserIds = activeUserRows.map(r => r.user_id)
 
-  // skillCountRows: Array<{ skillName: string; callCount: number }> from UNION helper
   const skillCounts: Record<string, number> = {}
-  for (const row of skillCountRows) {
-    skillCounts[row.skillName] = row.callCount
+  for (const row of skillGroups) {
+    if (row.skillName) skillCounts[row.skillName] = row._count.id
   }
 
   const agentCounts: Record<string, number> = {}
@@ -502,12 +486,6 @@ export async function getDailyRollups(
     })
 
     for (const row of existing) {
-      // Stale 가드: SKILL_COUNTS_INVALIDATION_AT 이전에 계산된 row 는 구 정의(isSkillCall=true only) 임.
-      // fresh 한 row 만 cache hit 으로 처리하고, stale row 는 missingDays 로 낙하 → 자연 재계산.
-      // computedAt 단일 조건만 사용 (skillCounts === '{}' 같은 합성 조건 없음).
-      if (row.computedAt < SKILL_COUNTS_INVALIDATION_AT) {
-        continue // stale → missingDays 에서 재계산됨
-      }
       const rollup = rowToRollup(row)
       cachedResults.set(rollup.date, rollup)
     }
@@ -562,32 +540,7 @@ export interface AggregatedSummary {
   modelShare: Array<{ model: string; totalTokens: number }>
 }
 
-export interface AggregateSummaryOptions {
-  /** Top-N skills to include. Default 5. */
-  topSkillsN?: number
-  /** Top-N agents to include. Default 5. */
-  topAgentsN?: number
-}
-
-/** @internal */
-export function normalizeAggregateSummaryOptions(
-  input?: number | AggregateSummaryOptions,
-): { topSkillsN: number; topAgentsN: number } {
-  if (typeof input === 'number') return { topSkillsN: input, topAgentsN: input }
-  return { topSkillsN: input?.topSkillsN ?? 5, topAgentsN: input?.topAgentsN ?? 5 }
-}
-
-// TS overloads — explicit 3-way signature (Critique R2 #5 / Decision-4)
-export function aggregateSummary(rollups: DailyRollup[]): AggregatedSummary
-/** @deprecated Pass an AggregateSummaryOptions object. topN maps to both topSkillsN and topAgentsN. */
-export function aggregateSummary(rollups: DailyRollup[], topN: number): AggregatedSummary
-export function aggregateSummary(rollups: DailyRollup[], opts: AggregateSummaryOptions): AggregatedSummary
-export function aggregateSummary(
-  rollups: DailyRollup[],
-  optsOrTopN?: number | AggregateSummaryOptions,
-): AggregatedSummary {
-  const { topSkillsN, topAgentsN } = normalizeAggregateSummaryOptions(optsOrTopN)
-
+export function aggregateSummary(rollups: DailyRollup[], topN = 5): AggregatedSummary {
   const totals = {
     sessionCount: 0,
     turnCount: 0,
@@ -616,24 +569,15 @@ export function aggregateSummary(
     for (const [k, v] of Object.entries(r.modelTokens)) modelTokens[k] = (modelTokens[k] ?? 0) + v
   }
 
-  // Deterministic tie-break: callCount DESC, skillName ASC (codepoint binary —
-  // Postgres COLLATE "C" 와 정렬 결과 일치시켜 skills route 와 동일 순서 보장).
   const topSkills = Object.entries(skillCounts)
     .map(([skillName, callCount]) => ({ skillName, callCount }))
-    .sort((a, b) => {
-      if (b.callCount !== a.callCount) return b.callCount - a.callCount
-      return a.skillName < b.skillName ? -1 : a.skillName > b.skillName ? 1 : 0
-    })
-    .slice(0, topSkillsN)
+    .sort((a, b) => b.callCount - a.callCount)
+    .slice(0, topN)
 
-  // Deterministic tie-break: callCount DESC, agentType ASC (codepoint binary).
   const topAgents = Object.entries(agentCounts)
     .map(([agentType, callCount]) => ({ agentType, callCount }))
-    .sort((a, b) => {
-      if (b.callCount !== a.callCount) return b.callCount - a.callCount
-      return a.agentType < b.agentType ? -1 : a.agentType > b.agentType ? 1 : 0
-    })
-    .slice(0, topAgentsN)
+    .sort((a, b) => b.callCount - a.callCount)
+    .slice(0, topN)
 
   const modelShare = Object.entries(modelTokens)
     .filter(([, v]) => v > 0)

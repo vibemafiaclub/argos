@@ -1,7 +1,7 @@
+import { join } from 'path'
 import chalk from 'chalk'
 import ora from 'ora'
 import { DEFAULT_API_URL, normalizeApiUrl } from '../lib/config.js'
-import { injectAgentHooks, printAgentHookResult, printCodexTrustNotice } from '../lib/inject-agent-hooks.js'
 import type { CreateProjectResponse } from '@argos/shared'
 import type { CommandFactory, ExternalDeps } from '../deps.js'
 import type { Config } from '../lib/config.js'
@@ -116,15 +116,20 @@ export const makeSetupCommand: CommandFactory<SetupCommandOptions> =
     })
     console.log(chalk.green('✓ .argos/project.json 작성'))
 
-    // Step 4: hook 설치 (Claude Code + Codex)
-    printAgentHookResult(injectAgentHooks(deps, deps.cwd()))
-    printCodexTrustNotice()
+    // Step 4: Claude Code hook 설치
+    const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
+    const hookResult = deps.hooks.inject(settingsPath)
+    if (hookResult === 'injected') {
+      console.log(chalk.green('✓ Claude Code hooks 설치 완료'))
+    } else {
+      console.log(chalk.yellow('✓ Claude Code hooks 이미 설치됨'))
+    }
 
     console.log()
     console.log(chalk.bold.green('✓ 설정 완료!'))
     console.log()
     console.log('다음 단계:')
-    console.log('  git add .argos/project.json .claude/settings.json .codex/hooks.json')
+    console.log('  git add .argos/project.json .claude/settings.json')
     console.log('  git commit -m "chore: add argos tracking"')
   }
 
@@ -149,13 +154,18 @@ async function connectExistingProject(
     process.exit(1)
   }
 
-  printAgentHookResult(injectAgentHooks(deps, deps.cwd()))
-  printCodexTrustNotice()
+  const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
+  const hookResult = deps.hooks.inject(settingsPath)
+  if (hookResult === 'injected') {
+    console.log(chalk.green('✓ Claude Code hooks 설치 완료'))
+  } else {
+    console.log(chalk.yellow('✓ Claude Code hooks 이미 설치됨'))
+  }
 
   console.log()
   console.log(chalk.bold.green('✓ 설정 완료!'))
   console.log()
-  console.log('기존 프로젝트에 연결되었습니다. Claude Code · Codex 를 사용하면 자동으로 기록됩니다.')
+  console.log('기존 프로젝트에 연결되었습니다. Claude Code를 사용하면 자동으로 기록됩니다.')
 }
 
 function isProjectCreationForbidden(err: unknown): boolean {
