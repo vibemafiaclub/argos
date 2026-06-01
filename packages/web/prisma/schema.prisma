@@ -224,17 +224,25 @@ model DailyProjectStat {
   @@map("daily_project_stats")
 }
 
+// ─── AgentSource ─────────────────────────────────────────────────────────
+// 세션을 생성한 코딩 에이전트(출처). 기존 세션 및 미지정은 CLAUDE.
+enum AgentSource {
+  CLAUDE
+  CODEX
+}
+
 // ─── ClaudeSession ─────────────────────────────────────────────────────────
-// Claude Code 세션 하나 = 하나의 row
-// id는 Claude Code의 session_id를 그대로 사용 (중복 방지)
+// 코딩 에이전트 세션 하나 = 하나의 row (Claude Code 또는 Codex)
+// id는 에이전트의 session_id를 그대로 사용 (중복 방지)
 
 model ClaudeSession {
-  id             String    @id  // Claude Code session_id
-  projectId      String    @map("project_id")
-  userId         String    @map("user_id")
-  transcriptPath String?   @map("transcript_path")
-  startedAt      DateTime  @default(now()) @map("started_at")
-  endedAt        DateTime? @map("ended_at")
+  id             String      @id  // 에이전트 session_id
+  projectId      String      @map("project_id")
+  userId         String      @map("user_id")
+  agent          AgentSource @default(CLAUDE)  // 세션 출처 (Claude Code / Codex)
+  transcriptPath String?     @map("transcript_path")
+  startedAt      DateTime    @default(now()) @map("started_at")
+  endedAt        DateTime?   @map("ended_at")
   // transcript.jsonl의 type="summary" 라인에서 추출 (주로 /compact 또는 resume 시 존재)
   // 없으면 응답 조립 단계에서 첫 HUMAN 메시지를 fallback title로 사용
   title          String?

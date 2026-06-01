@@ -49,10 +49,10 @@ export function NoOrganizationState({
         <div className="space-y-3">
           <div className="space-y-1">
             <h2 className="text-lg font-medium">
-              새 프로젝트를 Claude Code에 연결하세요
+              새 프로젝트를 Claude Code · Codex 에 연결하세요
             </h2>
             <p className="text-sm text-muted-foreground">
-              아래 프롬프트를 복사해 새로 추적할 프로젝트 폴더의 Claude Code 세션에
+              아래 프롬프트를 복사해 새로 추적할 프로젝트 폴더의 Claude Code · Codex 세션에
               붙여넣으면, Argos가 조직·프로젝트·hook 설치까지 자동으로 끝냅니다.
             </p>
           </div>

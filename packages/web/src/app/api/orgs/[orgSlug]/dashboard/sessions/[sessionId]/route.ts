@@ -43,18 +43,25 @@ export async function GET(
       return forbiddenByRole(access.role, '본인 세션만 열람 가능')
     }
 
-    const totalInput = session.usageRecords.reduce((sum, r) => sum + r.inputTokens, 0)
-    const totalOutput = session.usageRecords.reduce((sum, r) => sum + r.outputTokens, 0)
-    const totalCost = session.usageRecords.reduce((sum, r) => sum + (r.estimatedCostUsd ?? 0), 0)
+    let totalInput = 0
+    let totalOutput = 0
+    let totalCost = 0
+    const usageTimeline: SessionTimelineUsage[] = new Array(session.usageRecords.length)
 
-    const usageTimeline: SessionTimelineUsage[] = session.usageRecords.map((r) => ({
-      timestamp: r.timestamp.toISOString(),
-      inputTokens: r.inputTokens,
-      outputTokens: r.outputTokens,
-      estimatedCostUsd: r.estimatedCostUsd ?? 0,
-      model: r.model,
-      isSubagent: r.isSubagent,
-    }))
+    for (let i = 0; i < session.usageRecords.length; i++) {
+      const r = session.usageRecords[i]
+      totalInput += r.inputTokens
+      totalOutput += r.outputTokens
+      totalCost += r.estimatedCostUsd ?? 0
+      usageTimeline[i] = {
+        timestamp: r.timestamp.toISOString(),
+        inputTokens: r.inputTokens,
+        outputTokens: r.outputTokens,
+        estimatedCostUsd: r.estimatedCostUsd ?? 0,
+        model: r.model,
+        isSubagent: r.isSubagent,
+      }
+    }
 
     // 각 UsageRecord를 "직전 ASSISTANT 턴"에 귀속시켜 메시지별 토큰/비용/모델 집계.
     // TOOL 메시지는 건너뛰고 가장 가까운 선행 ASSISTANT로 타고 올라감.
@@ -95,6 +102,7 @@ export async function GET(
       id: session.id,
       userId: session.user.id,
       userName: session.user.name,
+      agent: session.agent,
       startedAt: session.startedAt.toISOString(),
       endedAt: session.endedAt?.toISOString() ?? null,
       inputTokens: totalInput,

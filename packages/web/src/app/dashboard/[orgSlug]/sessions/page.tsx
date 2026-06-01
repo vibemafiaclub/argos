@@ -7,6 +7,7 @@ import { useOrgs } from '@/hooks/use-orgs'
 import { subDays, format } from 'date-fns'
 import { Download, Trash2 } from 'lucide-react'
 import { DateRangePicker } from '@/components/dashboard/date-range-picker'
+import { AgentBadge } from '@/components/dashboard/agent-badge'
 import {
   useDashboardSessions,
   useDeleteSession,
@@ -311,12 +312,15 @@ function SessionsContent({
                       </td>
                     )}
                     <td className="py-3 px-4 max-w-md">
-                      <div className="truncate">
-                        {session.title ? (
-                          formatSlashCommandText(session.title)
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
+                      <div className="flex items-center gap-2">
+                        <span className="truncate">
+                          {session.title ? (
+                            formatSlashCommandText(session.title)
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </span>
+                        {session.agent === 'CODEX' && <AgentBadge agent={session.agent} className="shrink-0" />}
                       </div>
                     </td>
                     <td className="text-right py-3 px-4 whitespace-nowrap tabular-nums">{formatTokens(session.inputTokens)}</td>

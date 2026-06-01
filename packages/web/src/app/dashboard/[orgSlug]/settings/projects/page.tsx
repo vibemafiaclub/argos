@@ -1,7 +1,7 @@
 'use client'
 
 import { use, useState } from 'react'
-import { useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
 import {
   Card,
   CardContent,
@@ -28,6 +28,7 @@ import {
   type ProjectMemberCandidate,
 } from '@/hooks/use-project-members'
 import { useOrgs } from '@/hooks/use-orgs'
+import { useTransferProject } from '@/hooks/use-transfer-project'
 import { ApiError } from '@/lib/api-client'
 
 function MemberRow({
@@ -209,8 +210,130 @@ function ProjectMembersPanel({
   )
 }
 
+function TransferProjectPanel({
+  orgSlug,
+  projectId,
+  projectName,
+}: {
+  orgSlug: string
+  projectId: string
+  projectName: string
+}) {
+  const router = useRouter()
+  const orgs = useOrgs()
+  const transfer = useTransferProject(orgSlug, projectId)
+  const [targetOrgSlug, setTargetOrgSlug] = useState<string>('')
+  const [transferError, setTransferError] = useState<string | null>(null)
+  const [transferSuccess, setTransferSuccess] = useState<string | null>(null)
+
+  // 현재 org 를 제외한 OWNER 역할의 org 목록만 후보로 노출
+  const candidateOrgs = (orgs.data?.orgs ?? []).filter(
+    (o) => o.role === 'OWNER' && o.slug !== orgSlug
+  )
+
+  const handleTransfer = async () => {
+    if (!targetOrgSlug) return
+
+    const targetOrg = candidateOrgs.find((o) => o.slug === targetOrgSlug)
+    const targetOrgName = targetOrg?.name ?? targetOrgSlug
+
+    const confirmed = window.confirm(
+      `이 프로젝트를 "${targetOrgName}" 으로 이동합니다.\n` +
+        `모든 ProjectMember 가 제거되고, 대상 org 에서 멤버를 다시 부여해야 합니다.\n` +
+        `계속하시겠습니까?`
+    )
+    if (!confirmed) return
+
+    setTransferError(null)
+    setTransferSuccess(null)
+
+    try {
+      const result = await transfer.mutateAsync({ targetOrgSlug })
+      setTransferSuccess(
+        `"${projectName}" 프로젝트가 "${targetOrgName}" 으로 이동되었습니다.`
+      )
+      router.push(`/dashboard/${result.project.orgSlug}/settings/projects`)
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.status === 409 || err.code === 'PROJECT_SLUG_CONFLICT') {
+          setTransferError(
+            '대상 org 에 같은 이름(slug)의 프로젝트가 이미 있습니다. 한쪽 이름을 먼저 변경한 뒤 다시 시도하세요.'
+          )
+          return
+        }
+        if (err.status === 403) {
+          setTransferError(
+            '이전 또는 대상 org 의 OWNER 권한이 없습니다. 권한을 확인하세요.'
+          )
+          return
+        }
+        if (err.status === 404) {
+          setTransferError('프로젝트 또는 대상 org 를 찾을 수 없습니다.')
+          return
+        }
+      }
+      setTransferError('프로젝트 이동 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.')
+    }
+  }
+
+  if (candidateOrgs.length === 0) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          이동 가능한 org 가 없습니다. OWNER 역할을 가진 다른 org 가 있어야 합니다.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {transferError && (
+        <Alert variant="destructive">
+          <AlertDescription>{transferError}</AlertDescription>
+        </Alert>
+      )}
+      {transferSuccess && (
+        <Alert>
+          <AlertDescription>{transferSuccess}</AlertDescription>
+        </Alert>
+      )}
+      <div className="flex items-center gap-2">
+        <Select
+          value={targetOrgSlug}
+          onValueChange={(v) => {
+            setTargetOrgSlug(v ?? '')
+            setTransferError(null)
+            setTransferSuccess(null)
+          }}
+          disabled={transfer.isPending}
+        >
+          <SelectTrigger className="flex-1">
+            <SelectValue placeholder="대상 org 선택..." />
+          </SelectTrigger>
+          <SelectContent>
+            {candidateOrgs.map((o) => (
+              <SelectItem key={o.slug} value={o.slug}>
+                {o.name} ({o.slug})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          onClick={handleTransfer}
+          disabled={!targetOrgSlug || transfer.isPending}
+        >
+          {transfer.isPending ? '이동 중…' : '이동'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function ProjectAccessContent({ orgSlug }: { orgSlug: string }) {
-  const { data: session } = useSession()
   const orgs = useOrgs()
   const projects = useProjects(orgSlug)
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
@@ -218,6 +341,7 @@ function ProjectAccessContent({ orgSlug }: { orgSlug: string }) {
   const currentOrg = orgs.data?.orgs.find((o) => o.slug === orgSlug)
   const role = currentOrg?.role ?? 'MEMBER'
   const canManage = role === 'OWNER' || role === 'MANAGER'
+  const isOwner = role === 'OWNER'
 
   const isLoading = orgs.isLoading || projects.isLoading
 
@@ -298,6 +422,32 @@ function ProjectAccessContent({ orgSlug }: { orgSlug: string }) {
               <ProjectMembersPanel
                 orgSlug={orgSlug}
                 projectId={selectedProjectId}
+              />
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {isOwner && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Transfer Project</CardTitle>
+            <CardDescription>
+              선택한 프로젝트를 다른 org 로 이동합니다. 이동 시 모든
+              ProjectMember 가 제거되며, 대상 org 에서 멤버를 다시 부여해야
+              합니다.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!selectedProjectId || !selectedProject ? (
+              <p className="text-xs text-muted-foreground">
+                먼저 위에서 프로젝트를 선택하세요.
+              </p>
+            ) : (
+              <TransferProjectPanel
+                orgSlug={orgSlug}
+                projectId={selectedProjectId}
+                projectName={selectedProject.name}
               />
             )}
           </CardContent>

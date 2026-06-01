@@ -1,0 +1,71 @@
+# Argos UC Registry
+#
+# 단일 진실: 각 UC .md 의 frontmatter 가 authoritative.
+# 이 파일은 (a) next-id 카운터 와 (b) 빠른 lookup 캐시 역할.
+# .claude/agents/new-task-usecase.md 가 자동 유지하며, 수동 수정도 허용된다.
+#
+# 규칙:
+# - 새 UC 추가 시 next_id.<DOMAIN> 의 값을 그 UC 에 할당하고 next_id 를 +1 한다.
+# - ID 는 재발급 금지. deprecated UC 도 entry 를 유지하고 status: deprecated 로만 표시.
+# - 새 도메인 추가 시 next_id 에 prefix 를 추가하면서 docs/usecases/<domain>/ 폴더를 만든다.
+
+next_id:
+  ORG: 1
+  PROJ: 2
+  SESS: 4
+  CLI: 2
+  BILL: 1
+  AUTH: 1
+  SHARED: 1  # _shared/ 폴더의 subfunction UC 용. 도메인 prefix 는 SHARED.
+
+usecases:
+  UC-CLI-001:
+    file: docs/usecases/cli/UC-CLI-001-self-heal-project-config.md
+    name: stale `.argos/project.json` 을 hook 응답으로 자동 보정한다
+    level: user-goal
+    scope: CLI hook (argos-ai) + 백엔드 events API
+    primary_actor: CLI hook (Claude Code 가 발화)
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-14
+  UC-PROJ-001:
+    file: docs/usecases/project/UC-PROJ-001-transfer-project.md
+    name: 프로젝트를 다른 organization 으로 이동시킨다
+    level: user-goal
+    scope: 웹 대시보드 + 백엔드 API
+    primary_actor: 출발·대상 org 양쪽 OWNER 사용자
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-14
+  UC-SESS-001:
+    file: docs/usecases/session/UC-SESS-001-ribbon-highlight-skill-subagent.md
+    name: Transcript ribbon 에서 skill / subagent 호출 구간을 한눈에 식별한다
+    level: user-goal
+    scope: Argos 웹 대시보드 Session Transcript 화면 (session-activity-ribbon + event-list + event-detail)
+    primary_actor: 세션 transcript 를 들여다보는 프로젝트 OWNER 또는 MEMBER
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-14
+  UC-SESS-002:
+    file: docs/usecases/session/UC-SESS-002-view-skill-project-breakdown.md
+    name: skill 별 project 분포를 본다
+    level: user-goal
+    scope: 웹 대시보드 (`/dashboard/[orgSlug]/skills`) + 백엔드 API (`/api/orgs/[orgSlug]/dashboard/skills`)
+    primary_actor: org 의 멤버 사용자 (OWNER/ADMIN/MEMBER 동일 동작)
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-15
+  UC-SESS-003:
+    file: docs/usecases/session/UC-SESS-003-view-overview-skill-frequency-card.md
+    name: Overview 의 "Skill별 호출 빈도" 카드를 본다
+    level: user-goal
+    scope: 웹 대시보드 (`/dashboard/[orgSlug]/overview`) + 백엔드 API (`/api/orgs/[orgSlug]/dashboard/overview`) + `daily_project_stats` 사전집계
+    primary_actor: orgSlug 의 멤버 사용자 (OWNER/ADMIN/MEMBER 동일 동작)
+    status: active
+    includes: []
+    coverage_status: pending
+    last_reviewed: 2026-05-15

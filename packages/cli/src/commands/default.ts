@@ -1,7 +1,7 @@
-import { join } from 'path'
 import chalk from 'chalk'
 import ora from 'ora'
 import { DEFAULT_API_URL, normalizeApiUrl, type Config } from '../lib/config.js'
+import { injectAgentHooks, printAgentHookResult, printCodexTrustNotice } from '../lib/inject-agent-hooks.js'
 import type { ProjectConfig } from '../lib/project.js'
 import type { CreateProjectResponse } from '@argos/shared'
 import type { ExternalDeps, CommandFactory } from '../deps.js'
@@ -91,21 +91,16 @@ async function runFullSetup(deps: ExternalDeps, customApiUrl: string | undefined
   })
   console.log(chalk.green('✓ .argos/project.json 작성'))
 
-  // Step 4: Inject hooks
-  const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
-  const hookResult = deps.hooks.inject(settingsPath)
-  if (hookResult === 'injected') {
-    console.log(chalk.green('✓ Claude Code hooks 설치 완료'))
-  } else {
-    console.log(chalk.yellow('✓ Claude Code hooks 이미 설치됨'))
-  }
+  // Step 4: Inject hooks (Claude Code + Codex)
+  printAgentHookResult(injectAgentHooks(deps, deps.cwd()))
+  printCodexTrustNotice()
 
   // Success message
   console.log()
   console.log(chalk.bold.green('✓ 설정 완료!'))
   console.log()
   console.log('다음 단계:')
-  console.log('  git add .argos/project.json .claude/settings.json')
+  console.log('  git add .argos/project.json .claude/settings.json .codex/hooks.json')
   console.log('  git commit -m "chore: add argos tracking"')
   console.log()
   console.log('팀원들이 이 저장소를 clone한 뒤 argos를 실행하면 자동으로 팀에 합류됩니다.')
@@ -155,7 +150,8 @@ async function runLoginAndJoin(deps: ExternalDeps, project: ProjectConfig, custo
   console.log()
   console.log(chalk.bold.green('✓ 설정 완료!'))
   console.log()
-  console.log('트래킹이 활성화되었습니다. Claude Code를 사용하면 자동으로 기록됩니다.')
+  console.log('트래킹이 활성화되었습니다. Claude Code · Codex 를 사용하면 자동으로 기록됩니다.')
+  console.log(chalk.dim('(Codex 는 codex 실행 후 /hooks 에서 argos hook 들을 trust 해야 동작합니다.)'))
 }
 
 /**
@@ -195,14 +191,9 @@ async function runProjectInit(deps: ExternalDeps, config: Config, customApiUrl: 
   })
   console.log(chalk.green('✓ .argos/project.json 작성'))
 
-  // Inject hooks
-  const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
-  const hookResult = deps.hooks.inject(settingsPath)
-  if (hookResult === 'injected') {
-    console.log(chalk.green('✓ Claude Code hooks 설치 완료'))
-  } else {
-    console.log(chalk.yellow('✓ Claude Code hooks 이미 설치됨'))
-  }
+  // Inject hooks (Claude Code + Codex)
+  printAgentHookResult(injectAgentHooks(deps, deps.cwd()))
+  printCodexTrustNotice()
 
   console.log()
   console.log(chalk.bold.green('✓ 설정 완료!'))
@@ -235,12 +226,7 @@ async function ensureOrgMembershipAndShowStatus(
   console.log('조직:    ' + project.orgName)
   console.log('API:     ' + (project.apiUrl ?? config.apiUrl ?? DEFAULT_API_URL))
 
-  // Check hooks
-  const settingsPath = join(deps.cwd(), '.claude', 'settings.json')
-  const hookResult = deps.hooks.inject(settingsPath)
-  if (hookResult === 'injected') {
-    console.log('Hooks:   ' + chalk.green('✓ .claude/settings.json에 설치됨'))
-  } else {
-    console.log('Hooks:   ' + chalk.green('✓ .claude/settings.json에 설치됨'))
-  }
+  // Check hooks (self-heal: 누락 시 주입)
+  injectAgentHooks(deps, deps.cwd())
+  console.log('Hooks:   ' + chalk.green('✓ .claude/settings.json · .codex/hooks.json 설치됨'))
 }
