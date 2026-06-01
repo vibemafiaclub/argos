@@ -1,4 +1,4 @@
-import { useMemo, memo } from "react";
+import { useMemo, memo, type ReactElement } from "react";
 import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
@@ -217,7 +217,7 @@ function Row({
   sessionStartedAt,
   onSelect,
   onToggleGroup,
-}: RowComponentProps<RowProps>) {
+}: RowComponentProps<RowProps>): ReactElement | null {
   const row = rows[index];
   if (!row) return null;
 
@@ -259,7 +259,7 @@ function Row({
   );
 }
 
-const MemoizedRow = memo(Row, (prevProps, nextProps) => {
+const MemoizedRowInner = memo(Row, (prevProps, nextProps) => {
   if (prevProps.index !== nextProps.index) return false;
   if (prevProps.style !== nextProps.style) return false;
   if (prevProps.sessionStartedAt !== nextProps.sessionStartedAt) return false;
@@ -278,6 +278,10 @@ const MemoizedRow = memo(Row, (prevProps, nextProps) => {
 
   return true;
 }) as typeof Row;
+
+function MemoizedRow(props: RowComponentProps<RowProps>): ReactElement | null {
+  return <MemoizedRowInner {...props} />;
+}
 
 export function EventList({
   events,
