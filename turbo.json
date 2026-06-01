@@ -11,7 +11,9 @@
         "DATABASE_URL",
         "DIRECT_URL",
         "JWT_SECRET",
-        "NODE_ENV"
+        "NODE_ENV",
+        "ADMIN_USERNAME",
+        "ADMIN_PASSWORD"
       ]
     },
     "dev": {
