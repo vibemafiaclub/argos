@@ -13,16 +13,22 @@ const ADMIN_SESSION_COOKIE = 'argos_admin_session'
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
-
-// codeql[js/insecure-password-hashing]
-function getHash(value: string) {
-  return createHmac('sha256', env.JWT_SECRET).update(value).digest()
-}
+const MAX_SAFE_EQUAL_BYTES = 512
 
 function safeEqual(a: string, b: string): boolean {
-  const aHash = getHash(a)
-  const bHash = getHash(b)
-  return timingSafeEqual(aHash, bHash)
+  const aBytes = Buffer.from(a)
+  const bBytes = Buffer.from(b)
+
+  if (aBytes.length > MAX_SAFE_EQUAL_BYTES || bBytes.length > MAX_SAFE_EQUAL_BYTES) {
+    return false
+  }
+
+  const aPadded = Buffer.alloc(MAX_SAFE_EQUAL_BYTES)
+  const bPadded = Buffer.alloc(MAX_SAFE_EQUAL_BYTES)
+  aBytes.copy(aPadded)
+  bBytes.copy(bPadded)
+
+  return timingSafeEqual(aPadded, bPadded) && aBytes.length === bBytes.length
 }
 
 function sign(payload: string): string {
