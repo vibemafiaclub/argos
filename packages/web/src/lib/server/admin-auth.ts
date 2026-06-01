@@ -6,7 +6,6 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { env } from './env'
 
-// 🛡️ Sentinel: Removed hardcoded admin credentials, using env vars
 export const ADMIN_USERNAME = env.ADMIN_USERNAME
 export const ADMIN_PASSWORD = env.ADMIN_PASSWORD
 
@@ -16,7 +15,6 @@ const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
 
 function getHash(value: string) {
-  // codeql[js/insecure-password-hashing]
   return createHmac('sha256', env.JWT_SECRET).update(value).digest()
 }
 
