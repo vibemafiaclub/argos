@@ -277,7 +277,7 @@ const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   if (prevIsSelected !== nextIsSelected) return false;
 
   return true;
-});
+}) as typeof Row;
 
 export function EventList({
   events,
@@ -302,8 +302,7 @@ export function EventList({
 
   return (
     <List
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rowComponent={MemoizedRow as any}
+      rowComponent={MemoizedRow}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{
