@@ -52,7 +52,6 @@ function formatElapsed(timestamp: string, sessionStartedAt: string): string {
 function buildFlatRows(
   events: TimelineEvent[],
   expandedGroups: Set<number>,
-  selectedIdx: number,
 ): FlatRow[] {
   const groups = buildTimelineGroups(events);
   const rows: FlatRow[] = [];
@@ -80,9 +79,7 @@ function buildFlatRows(
       continue;
     }
     const firstIdx = group.items[0].idx;
-    const lastIdx = group.items[group.items.length - 1].idx;
-    const containsSelected = selectedIdx >= firstIdx && selectedIdx <= lastIdx;
-    const isExpanded = expandedGroups.has(firstIdx) || containsSelected;
+    const isExpanded = expandedGroups.has(firstIdx);
     rows.push({
       kind: "groupHeader",
       key: `gh-${firstIdx}`,
@@ -288,8 +285,8 @@ export function EventList({
   onToggleGroup,
 }: EventListProps) {
   const rows = useMemo(
-    () => buildFlatRows(events, expandedGroups, selectedIdx),
-    [events, expandedGroups, selectedIdx],
+    () => buildFlatRows(events, expandedGroups),
+    [events, expandedGroups],
   );
 
   if (events.length === 0) {
