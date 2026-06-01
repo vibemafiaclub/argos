@@ -1,6 +1,9 @@
 export type EventType = 'SESSION_START' | 'PRE_TOOL_USE' | 'POST_TOOL_USE' | 'STOP' | 'SUBAGENT_STOP'
 export type MessageRole = 'HUMAN' | 'ASSISTANT' | 'TOOL'
 
+// 세션을 생성한 코딩 에이전트(출처). 미지정 시 CLAUDE 로 간주(후방호환).
+export type AgentSource = 'CLAUDE' | 'CODEX'
+
 export interface UsagePayload {
   inputTokens: number
   outputTokens: number
@@ -26,11 +29,22 @@ export interface MessagePayload {
   durationMs?: number
 }
 
+// POST /api/events 성공(202) 응답 타입 — 기존 { ok: true }의 superset
+export interface IngestEventResponse {
+  ok: true
+  project: {
+    id: string
+    orgId: string
+    orgSlug: string
+  }
+}
+
 // CLI가 POST /api/events로 전송하는 payload
 export interface IngestEventPayload {
   sessionId: string
   projectId: string
   hookEventName: EventType
+  agent?: AgentSource // 세션 출처(Claude Code / Codex). 미지정이면 서버가 CLAUDE 로 간주
   toolName?: string
   toolInput?: Record<string, unknown>
   toolResponse?: string   // 2,000자 truncation

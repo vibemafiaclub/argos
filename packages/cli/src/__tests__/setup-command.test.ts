@@ -46,6 +46,7 @@ function makeMockDeps(overrides: Partial<ExternalDeps> = {}): ExternalDeps {
     },
     project: {
       find: vi.fn().mockReturnValue(null),
+      findWithPath: vi.fn().mockReturnValue(null),
       write: vi.fn(),
     },
     auth: {
@@ -93,6 +94,7 @@ describe('makeSetupCommand', () => {
     const deps = makeMockDeps({
       project: {
         find: vi.fn().mockReturnValue(MOCK_PROJECT),
+        findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: '/test/cwd/.argos/project.json' }),
         write: vi.fn(),
       },
     })
@@ -125,6 +127,7 @@ describe('makeSetupCommand', () => {
       },
       project: {
         find: vi.fn().mockReturnValue(MOCK_PROJECT),
+        findWithPath: vi.fn().mockReturnValue({ config: MOCK_PROJECT, configPath: '/test/cwd/.argos/project.json' }),
         write: vi.fn(),
       },
     })

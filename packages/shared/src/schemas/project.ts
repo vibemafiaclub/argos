@@ -12,3 +12,7 @@ export const UpdateProjectSchema = z.object({
 export const JoinOrgSchema = z.object({
   orgId: z.string(),
 })
+
+export const TransferProjectSchema = z.object({
+  targetOrgSlug: z.string().trim().min(1).regex(/^[a-z0-9-]+$/),
+})

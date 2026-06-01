@@ -1,6 +1,7 @@
 import type { Config } from './lib/config.js'
 import type { ProjectConfig } from './lib/project.js'
-import type { LoginResponse, ExchangeResponse, CreateProjectResponse, IngestEventPayload, UsagePayload, UsagePerTurnPayload, MessagePayload } from '@argos/shared'
+import type { SendEventBackgroundOpts } from './lib/event-sender.js'
+import type { LoginResponse, ExchangeResponse, CreateProjectResponse, UsagePayload, UsagePerTurnPayload, MessagePayload } from '@argos/shared'
 
 export interface ExternalDeps {
   config: {
@@ -10,6 +11,7 @@ export interface ExternalDeps {
   }
   project: {
     find(cwd?: string): ProjectConfig | null
+    findWithPath(cwd?: string): { config: ProjectConfig; configPath: string } | null
     write(config: ProjectConfig): void
   }
   auth: {
@@ -23,7 +25,7 @@ export interface ExternalDeps {
     revokeToken(token: string, apiUrl: string): Promise<void>
   }
   hooks: {
-    inject(settingsPath: string): 'injected' | 'already_present'
+    inject(settingsPath: string, agent?: 'claude' | 'codex'): 'injected' | 'already_present'
     fileExists(path: string): boolean
   }
   prompt: {
@@ -35,9 +37,13 @@ export interface ExternalDeps {
     detectSlashCommand(path: string): Promise<string | null>
     extractMessages(path: string): Promise<MessagePayload[]>
     extractSummary(path: string): Promise<string | null>
+    // Codex rollout 파서 (agent === 'codex' 일 때 사용)
+    extractUsageCodex(path: string): Promise<UsagePayload | null>
+    extractUsagePerTurnCodex(path: string): Promise<UsagePerTurnPayload[]>
+    extractMessagesCodex(path: string): Promise<MessagePayload[]>
   }
   events: {
-    sendBackground(url: string, token: string, payload: IngestEventPayload): void
+    sendBackground(opts: SendEventBackgroundOpts): void
   }
   cwd(): string
 }
