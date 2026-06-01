@@ -43,8 +43,6 @@ export async function GET(
       return forbiddenByRole(access.role, '본인 세션만 열람 가능')
     }
 
-    // ⚡ Bolt Optimization: Replace 3 .reduce() calls and 1 .map() with a single loop
-    // Reduces O(4N) array passes into O(N) iteration, saving CPU cycles on large payloads
     let totalInput = 0
     let totalOutput = 0
     let totalCost = 0

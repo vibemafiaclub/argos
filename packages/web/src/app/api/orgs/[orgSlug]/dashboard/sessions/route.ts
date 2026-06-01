@@ -33,8 +33,6 @@ const sessionInclude = {
 type SessionWithInclude = Prisma.ClaudeSessionGetPayload<{ include: typeof sessionInclude }>
 
 function getSessionTotals(session: SessionWithInclude) {
-  // ⚡ Bolt Optimization: Use a single loop instead of 3 array reductions
-  // Reduces iteration overhead from O(3N) to O(N)
   let inputTokens = 0
   let outputTokens = 0
   let estimatedCostUsd = 0
