@@ -51,6 +51,6 @@
     "prisma": "^6",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^3.2.6"
+    "vitest": "^4.1.8"
   }
 }
