@@ -75,12 +75,15 @@ const UPDATED_PROJECT = {
   createdAt: new Date('2024-01-01'),
 }
 
-// tx 객체 타입: db.$transaction 콜백에 주입되는 Prisma 트랜잭션 클라이언트의 최소 타입
-type TxClient = {
+// tx mock 타입: 테스트에서 쓰는 Prisma 트랜잭션 클라이언트의 최소 mock shape.
+// 실제 callback 에는 Prisma.TransactionClient 로 캐스팅해서 production 시그니처를 유지한다.
+type MockTxClient = {
   orgMembership: { findUnique: ReturnType<typeof vi.fn> }
   projectMember: { deleteMany: ReturnType<typeof vi.fn> }
   project: { update: ReturnType<typeof vi.fn> }
 }
+
+type TransactionCallback = (tx: Prisma.TransactionClient) => Promise<unknown>
 
 /** db.$transaction callback form 을 실제 실행하는 helper */
 function setupTransactionCallbackRunner() {
@@ -88,7 +91,7 @@ function setupTransactionCallbackRunner() {
     async (arg: unknown) => {
       if (typeof arg === 'function') {
         // callback form: tx 객체를 주입해 실행
-        const tx: TxClient = {
+        const tx: MockTxClient = {
           orgMembership: { findUnique: vi.fn() },
           projectMember: { deleteMany: vi.fn() },
           project: { update: vi.fn() },
@@ -99,7 +102,7 @@ function setupTransactionCallbackRunner() {
           .mockResolvedValueOnce({ role: 'OWNER' as OrgRole }) // targetM
         vi.mocked(tx.projectMember.deleteMany).mockResolvedValue({ count: 2 })
         vi.mocked(tx.project.update).mockResolvedValue(UPDATED_PROJECT)
-        return (arg as (tx: TxClient) => Promise<unknown>)(tx)
+        return (arg as TransactionCallback)(tx as unknown as Prisma.TransactionClient)
       }
       return arg
     }
@@ -413,7 +416,7 @@ describe('transferProjectForUser', () => {
     ;(db.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       async (arg: unknown) => {
         if (typeof arg === 'function') {
-          const tx: TxClient = {
+          const tx: MockTxClient = {
             orgMembership: { findUnique: vi.fn() },
             projectMember: { deleteMany: vi.fn() },
             project: { update: vi.fn() },
@@ -422,7 +425,7 @@ describe('transferProjectForUser', () => {
           vi.mocked(tx.orgMembership.findUnique)
             .mockResolvedValueOnce({ role: 'MEMBER' as OrgRole }) // sourceM 강등
             .mockResolvedValueOnce({ role: 'OWNER' as OrgRole })  // targetM
-          return (arg as (tx: TxClient) => Promise<unknown>)(tx)
+          return (arg as TransactionCallback)(tx as unknown as Prisma.TransactionClient)
         }
       }
     )
@@ -432,5 +435,44 @@ describe('transferProjectForUser', () => {
     })
 
     expect(result.kind).toBe('forbidden')
+  })
+
+  it('forbidden_race — 트랜잭션 중 project org 변경 시 forbidden 반환하고 멤버 삭제 안 함', async () => {
+    vi.mocked(db.project.findUnique).mockResolvedValue(
+      BASE_PROJECT as unknown as Awaited<ReturnType<typeof db.project.findUnique>>
+    )
+    vi.mocked(db.organization.findUnique).mockResolvedValue(
+      BASE_TARGET_ORG as unknown as Awaited<ReturnType<typeof db.organization.findUnique>>
+    )
+
+    const staleProjectError = new Prisma.PrismaClientKnownRequestError(
+      'No Project found',
+      { code: 'P2025', clientVersion: 'test' }
+    )
+    const txProjectMemberDeleteMany = vi.fn()
+
+    ;(db.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (arg: unknown) => {
+        if (typeof arg === 'function') {
+          const tx: MockTxClient = {
+            orgMembership: { findUnique: vi.fn() },
+            projectMember: { deleteMany: txProjectMemberDeleteMany },
+            project: { update: vi.fn() },
+          }
+          vi.mocked(tx.orgMembership.findUnique)
+            .mockResolvedValueOnce({ role: 'OWNER' as OrgRole })
+            .mockResolvedValueOnce({ role: 'OWNER' as OrgRole })
+          vi.mocked(tx.project.update).mockRejectedValue(staleProjectError)
+          return (arg as TransactionCallback)(tx as unknown as Prisma.TransactionClient)
+        }
+      }
+    )
+
+    const result = await transferProjectForUser(PROJECT_ID, USER_ID, {
+      targetOrgSlug: TARGET_ORG_SLUG,
+    })
+
+    expect(result.kind).toBe('forbidden')
+    expect(txProjectMemberDeleteMany).not.toHaveBeenCalled()
   })
 })

@@ -1,4 +1,4 @@
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { normalizeApiUrl } from './config.js'
 
@@ -22,7 +22,7 @@ export interface ProjectConfig {
 export function findProjectConfigWithPath(
   startDir?: string,
 ): { config: ProjectConfig; configPath: string } | null {
-  let currentDir = startDir || process.cwd()
+  let currentDir = resolve(startDir || process.cwd())
   let depth = 0
   const maxDepth = 10
 
