@@ -52,6 +52,7 @@ function formatElapsed(timestamp: string, sessionStartedAt: string): string {
 function buildFlatRows(
   events: TimelineEvent[],
   expandedGroups: Set<number>,
+  selectedIdx: number,
 ): FlatRow[] {
   const groups = buildTimelineGroups(events);
   const rows: FlatRow[] = [];
@@ -79,7 +80,9 @@ function buildFlatRows(
       continue;
     }
     const firstIdx = group.items[0].idx;
-    const isExpanded = expandedGroups.has(firstIdx);
+    const lastIdx = group.items[group.items.length - 1].idx;
+    const containsSelected = selectedIdx >= firstIdx && selectedIdx <= lastIdx;
+    const isExpanded = expandedGroups.has(firstIdx) || containsSelected;
     rows.push({
       kind: "groupHeader",
       key: `gh-${firstIdx}`,
@@ -263,11 +266,13 @@ const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   if (prevProps.onSelect !== nextProps.onSelect) return false;
   if (prevProps.onToggleGroup !== nextProps.onToggleGroup) return false;
 
-  if (prevProps.rows[prevProps.index] !== nextProps.rows[nextProps.index]) return false;
-
   const prevRow = prevProps.rows[prevProps.index];
+  const nextRow = nextProps.rows[nextProps.index];
+
+  if (prevRow !== nextRow) return false;
+
   const prevIsSelected = prevRow && prevRow.kind !== 'groupHeader' ? prevRow.idx === prevProps.selectedIdx : false;
-  const nextIsSelected = prevRow && prevRow.kind !== 'groupHeader' ? prevRow.idx === nextProps.selectedIdx : false;
+  const nextIsSelected = nextRow && nextRow.kind !== 'groupHeader' ? nextRow.idx === nextProps.selectedIdx : false;
 
   if (prevIsSelected !== nextIsSelected) return false;
 
@@ -283,8 +288,8 @@ export function EventList({
   onToggleGroup,
 }: EventListProps) {
   const rows = useMemo(
-    () => buildFlatRows(events, expandedGroups),
-    [events, expandedGroups],
+    () => buildFlatRows(events, expandedGroups, selectedIdx),
+    [events, expandedGroups, selectedIdx],
   );
 
   if (events.length === 0) {
@@ -297,7 +302,8 @@ export function EventList({
 
   return (
     <List
-      rowComponent={MemoizedRow}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rowComponent={MemoizedRow as any}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{
