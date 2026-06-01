@@ -1,3 +1,0 @@
-## 2024-05-29 - React-Window Memoization Bottleneck
-**Learning:** `react-window` v2 spreads props like `selectedIdx` and `rows` directly into the `Row` component via `rowProps`. Because of this, when `selectedIdx` changes, EVERY row in the virtualized list will re-render by default because the `selectedIdx` prop reference changed, even if their specific selection status did not.
-**Action:** When using `react-window`, always wrap the `Row` component in `React.memo` with a custom `areEqual` function that plucks the specific row's state (e.g. `prevProps.rows[prevProps.index] === nextProps.rows[nextProps.index]`) to prevent unnecessary re-renders of the entire visible window.
