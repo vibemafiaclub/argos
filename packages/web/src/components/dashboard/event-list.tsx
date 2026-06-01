@@ -52,6 +52,7 @@ function formatElapsed(timestamp: string, sessionStartedAt: string): string {
 function buildFlatRows(
   events: TimelineEvent[],
   expandedGroups: Set<number>,
+  selectedGroupFirstIdx: number | null,
 ): FlatRow[] {
   const groups = buildTimelineGroups(events);
   const rows: FlatRow[] = [];
@@ -79,7 +80,8 @@ function buildFlatRows(
       continue;
     }
     const firstIdx = group.items[0].idx;
-    const isExpanded = expandedGroups.has(firstIdx);
+    const isExpanded =
+      expandedGroups.has(firstIdx) || selectedGroupFirstIdx === firstIdx;
     rows.push({
       kind: "groupHeader",
       key: `gh-${firstIdx}`,
@@ -103,6 +105,23 @@ function buildFlatRows(
     }
   }
   return rows;
+}
+
+function getSelectedGroupFirstIdx(
+  events: TimelineEvent[],
+  selectedIdx: number,
+): number | null {
+  const groups = buildTimelineGroups(events);
+  for (const group of groups) {
+    if (group.kind === "single" || group.items.length <= 1) continue;
+
+    const firstIdx = group.items[0].idx;
+    const lastIdx = group.items[group.items.length - 1].idx;
+    if (selectedIdx >= firstIdx && selectedIdx <= lastIdx) {
+      return firstIdx;
+    }
+  }
+  return null;
 }
 
 function getSingleLabel(event: TimelineEvent): string {
@@ -256,6 +275,10 @@ function Row({
   );
 }
 
+type EventRowComponent = (
+  props: RowComponentProps<RowProps>,
+) => ReactElement | null;
+
 const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   if (prevProps.index !== nextProps.index) return false;
   if (prevProps.style !== nextProps.style) return false;
@@ -274,7 +297,7 @@ const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   if (prevIsSelected !== nextIsSelected) return false;
 
   return true;
-}) as unknown as typeof Row;
+}) as EventRowComponent;
 
 export function EventList({
   events,
@@ -284,9 +307,13 @@ export function EventList({
   expandedGroups,
   onToggleGroup,
 }: EventListProps) {
+  const selectedGroupFirstIdx = useMemo(
+    () => getSelectedGroupFirstIdx(events, selectedIdx),
+    [events, selectedIdx],
+  );
   const rows = useMemo(
-    () => buildFlatRows(events, expandedGroups),
-    [events, expandedGroups],
+    () => buildFlatRows(events, expandedGroups, selectedGroupFirstIdx),
+    [events, expandedGroups, selectedGroupFirstIdx],
   );
 
   if (events.length === 0) {
