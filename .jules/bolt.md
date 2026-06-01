@@ -1,3 +1,0 @@
-## 2024-06-01 - Consolidate Multiple Iterations Over Prisma Include Datasets
-**Learning:** Chained array methods like `.reduce()` and `.map()` on relations loaded via Prisma `include` clauses cause unnecessary performance overhead due to multiple passes over the same dataset. This becomes a measurable bottleneck when the relation returns a large number of records (e.g., `usageRecords` on `session` data).
-**Action:** Replace multiple functional iteration calls over relation sets loaded via `include` with a single, efficient `for` loop to compute all derived metrics and transformed arrays simultaneously.
