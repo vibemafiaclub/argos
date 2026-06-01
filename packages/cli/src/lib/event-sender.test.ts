@@ -2,13 +2,18 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { buildSelfHealScript } from './event-sender.js'
 
 const TMP_FILE = '/tmp/argos-test-payload.json'
+const TMP_DIR = '/tmp/argos-test-dir'
 const PROJECT_JSON_PATH = '/repo/.argos/project.json'
 
 describe('buildSelfHealScript', () => {
   let script: string
 
   beforeAll(() => {
-    script = buildSelfHealScript({ tmpFile: TMP_FILE, projectJsonPath: PROJECT_JSON_PATH })
+    script = buildSelfHealScript({
+      tmpFile: TMP_FILE,
+      tmpDir: TMP_DIR,
+      projectJsonPath: PROJECT_JSON_PATH,
+    })
   })
 
   it('returns a non-empty string', () => {
@@ -32,6 +37,19 @@ describe('buildSelfHealScript', () => {
 
   it('(c) contains renameSync call for atomic write', () => {
     expect(script).toContain('renameSync')
+  })
+
+  it('holds an inter-process lock while rewriting project.json', () => {
+    expect(script).toContain(`const lockDir=${JSON.stringify(PROJECT_JSON_PATH)}+'.lock'`)
+    const mkdirIdx = script.indexOf('fs.mkdirSync(lockDir)')
+    const readIdx = script.indexOf(`JSON.parse(fs.readFileSync(${JSON.stringify(PROJECT_JSON_PATH)},'utf8'))`)
+    const renameIdx = script.indexOf(`fs.renameSync(atomicTmp,${JSON.stringify(PROJECT_JSON_PATH)})`)
+    const releaseIdx = script.indexOf('fs.rmdirSync(lockDir)')
+
+    expect(mkdirIdx).toBeGreaterThanOrEqual(0)
+    expect(readIdx).toBeGreaterThan(mkdirIdx)
+    expect(renameIdx).toBeGreaterThan(readIdx)
+    expect(releaseIdx).toBeGreaterThan(renameIdx)
   })
 
   it('(d) contains res.status !== 202 guard', () => {
@@ -74,6 +92,15 @@ describe('buildSelfHealScript', () => {
     const finallyIdx = script.indexOf('finally')
     const afterFinally = script.slice(finallyIdx)
     expect(afterFinally).toContain('unlinkSync')
+  })
+
+  it('cleans up the private tmp directory in finally block', () => {
+    const finallyIdx = script.indexOf('finally')
+    const afterFinally = script.slice(finallyIdx)
+    expect(afterFinally).toContain(TMP_DIR)
+    expect(afterFinally).toContain('rmSync')
+    expect(afterFinally).toContain('recursive:true')
+    expect(afterFinally).toContain('force:true')
   })
 
   it('is wrapped in an async IIFE', () => {
