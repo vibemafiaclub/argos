@@ -259,7 +259,7 @@ function Row({
   );
 }
 
-const MemoizedRowInner = memo(Row, (prevProps, nextProps) => {
+const MemoizedRow = memo(Row, (prevProps, nextProps) => {
   if (prevProps.index !== nextProps.index) return false;
   if (prevProps.style !== nextProps.style) return false;
   if (prevProps.sessionStartedAt !== nextProps.sessionStartedAt) return false;
@@ -277,11 +277,7 @@ const MemoizedRowInner = memo(Row, (prevProps, nextProps) => {
   if (prevIsSelected !== nextIsSelected) return false;
 
   return true;
-}) as typeof Row;
-
-function MemoizedRow(props: RowComponentProps<RowProps>): ReactElement | null {
-  return <MemoizedRowInner {...props} />;
-}
+}) as unknown as typeof Row;
 
 export function EventList({
   events,

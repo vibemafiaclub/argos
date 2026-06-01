@@ -13,3 +13,5 @@ backups/
 persuasion-data/runs/
 __pycache__/
 *.pyc
+
+.jules/
