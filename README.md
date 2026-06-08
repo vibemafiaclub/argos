@@ -124,6 +124,10 @@ argos --api-url https://your-instance.example.com
 
 이 레포는 [`greatSumini/cc-system`](https://github.com/greatSumini/cc-system) 의 자율 주행 하네스를 이식해 쓴다. `scripts/run-server.py` 를 돌리면 ideation → plan-and-build → commit → check → rollback 루프가 반복되며, 이터레이션별 산출물은 `iterations/<N>-<timestamp>/` 아래에 남는다. 하네스가 spawn 하는 서브 세션에는 `HARNESS_HEADLESS=1` 이 주입돼 사용자 확인 단계가 자동 승인된다 — 쉘에서 이 변수를 직접 export 하지 말 것 (인터랙티브 세션이 무인 모드로 튄다). 트리거는 레포 관리자(메인테이너) 수동.
 
+### findings → cycles → goals (FCG) 하네스
+
+위 루프와 별개로, 이 레포는 [`greatSumini/cc-system`](https://github.com/greatSumini/cc-system) 의 **findings-cycles-goals** 하네스도 이식했다. `goals/` 에 머신 검증되는 미션 스택을, `docs/findings/` 에 부채 큐를, `cycles/` 에 루프 세션 프롬프트를 둔다. 매 iteration 은 `bash scripts/diagnose.sh` 로 시작하고, `bash scripts/completion-check.sh` 가 모든 goal gate 를 병렬로 돌려 전체 체인이 green 인지(`.state/active-goal == ALL_DONE`) 검증한다. 새 작업은 `cycles/` 문서로 기술해 `prompts/cycle-generate.md` 를 통해 루핑 에이전트에 넘긴다. 설계는 `docs/goal-design.md`, iteration 매뉴얼은 `guidelines/goal-iteration.md` 참조.
+
 ## License
 
 MIT
