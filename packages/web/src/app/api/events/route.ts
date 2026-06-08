@@ -1,5 +1,5 @@
 import { NextResponse, after } from 'next/server'
-import { EventType, Prisma } from '@prisma/client'
+import { EventType } from '@prisma/client'
 import { IngestEventSchema, type IngestEventResponse } from '@argos/shared'
 import { db } from '@/lib/server/db'
 import { requireAuth } from '@/lib/server/auth-helper'
@@ -10,6 +10,7 @@ import {
   truncateToolResponse,
 } from '@/lib/server/events'
 import { calculateCost } from '@/lib/server/cost'
+import { parseEventMetadata } from '@/lib/server/parsers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -88,7 +89,7 @@ export async function POST(req: Request) {
           projectId: payload.projectId,
           eventType,
           toolName: payload.toolName ?? null,
-          toolInput: (payload.toolInput as Prisma.InputJsonValue) ?? null,
+          toolInput: parseEventMetadata(payload.toolInput),
           toolResponse: truncateToolResponse(payload.toolResponse) ?? null,
           exitCode: payload.exitCode ?? null,
           isSkillCall: derived.isSkillCall,
@@ -187,7 +188,7 @@ export async function POST(req: Request) {
                   sequence: m.sequence,
                   timestamp: new Date(m.timestamp),
                   toolName: m.toolName ?? null,
-                  toolInput: (m.toolInput as Prisma.InputJsonValue) ?? null,
+                  toolInput: parseEventMetadata(m.toolInput),
                   toolUseId: m.toolUseId ?? null,
                   durationMs: m.durationMs ?? null,
                 })),
@@ -258,7 +259,7 @@ async function upsertToolMessage(opts: {
       sequence: 0, // Stop 때 transcript 기준으로 재할당
       timestamp: new Date(),
       toolName: opts.toolName,
-      toolInput: (opts.toolInput as Prisma.InputJsonValue) ?? null,
+      toolInput: parseEventMetadata(opts.toolInput),
       toolUseId: opts.toolUseId,
       durationMs: null,
     },

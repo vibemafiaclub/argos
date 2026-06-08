@@ -1,7 +1,7 @@
 ---
 title: "Double type casts (as unknown as) bypass type safety in data transformations"
 created_at: 2026-06-08T18:42:00Z
-resolved: false
+resolved: true
 priority: P2
 related:
   - goals/_meta.md
@@ -130,3 +130,32 @@ A schema migration changes `DailyUserStat.count` from `number` to `bigint`. The 
 
 - Zod schemas can be reused for Prisma schema validation as well, creating a single source of truth.
 - Consider adding a pre-commit hook to catch new `as unknown as` patterns before they land.
+
+## Resolution
+
+Implemented `packages/web/src/lib/server/parsers.ts` with Zod-backed runtime validators:
+
+- `DailyUserStatSchema`
+- `parseDailyUserStats()`
+- `serializeDailyUserStats()`
+- `EventMetadataSchema`
+- `parseEventMetadata()`
+
+Updated `packages/web/src/lib/server/daily-rollup.ts`:
+
+- DB `userStats` JSON reads now use `parseDailyUserStats(row.userStats)`.
+- DB `userStats` JSON writes now use `serializeDailyUserStats(rollup.userStats)`.
+- The two `as unknown as` casts in this file were removed.
+
+Updated `packages/web/src/app/api/events/route.ts`:
+
+- event/message/tool `toolInput` JSON is validated through `parseEventMetadata()` before Prisma writes.
+- The route remains free of `as unknown as` casts.
+
+Added `packages/web/__tests__/lib/daily-rollup.test.ts` covering valid daily user stats, malformed data fallback, nullish fallback, serialization validation, and event metadata validation.
+
+Verification:
+
+- `pnpm --filter @argos/web exec vitest run __tests__/lib/daily-rollup.test.ts` passed.
+- `pnpm --filter @argos/web typecheck` passed.
+- `rg "as unknown as" packages/web/src/lib/server/daily-rollup.ts packages/web/src/app/api/events/route.ts` produced no matches.

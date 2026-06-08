@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import { aggregateSkillCountsForRange } from './skill-aggregation'
 import { db } from './db'
+import { parseDailyUserStats, serializeDailyUserStats } from './parsers'
 
 // ─── Cache invalidation threshold ─────────────────────────────────────────────
 // 이 시각 이전에 계산된 daily rollup 은 skillCounts 가 구 정의(events.isSkillCall=true only)로
@@ -345,7 +346,7 @@ function rowToRollup(row: {
     skillCounts: (row.skillCounts as Record<string, number>) ?? {},
     agentCounts: (row.agentCounts as Record<string, number>) ?? {},
     modelTokens: (row.modelTokens as Record<string, number>) ?? {},
-    userStats: (row.userStats as unknown as DailyUserStat[]) ?? [],
+    userStats: parseDailyUserStats(row.userStats),
   }
 }
 
@@ -364,7 +365,7 @@ async function upsertRollup(projectId: string, date: Date, rollup: DailyRollup):
     skillCounts: rollup.skillCounts as Prisma.InputJsonValue,
     agentCounts: rollup.agentCounts as Prisma.InputJsonValue,
     modelTokens: rollup.modelTokens as Prisma.InputJsonValue,
-    userStats: rollup.userStats as unknown as Prisma.InputJsonValue,
+    userStats: serializeDailyUserStats(rollup.userStats),
     computedAt: new Date(),
   }
   await db.dailyProjectStat.upsert({

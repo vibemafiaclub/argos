@@ -99,7 +99,7 @@ LOOP:
 - 테스트 3개 이상 GREEN
 - Zod 스키마 타입 추론으로 타입 안전성 복구
 
-**Status**: TODO
+**Status**: DONE
 
 ---
 
