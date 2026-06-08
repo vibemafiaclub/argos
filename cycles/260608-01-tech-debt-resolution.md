@@ -73,7 +73,7 @@ LOOP:
 - 테스트 3개 모두 GREEN
 - 나머지 라우트 포팅은 이후 cycle에서 점진적 수행 가능 (현재는 3개만)
 
-**Status**: TODO
+**Status**: PARTIAL
 
 ---
 

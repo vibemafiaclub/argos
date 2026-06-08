@@ -9,7 +9,20 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', '__tests__/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary'],
+      include: [
+        'src/app/api/events/route.ts',
+        'src/app/api/orgs/[orgSlug]/members/route.ts',
+        'src/app/api/orgs/[orgSlug]/projects/route.ts',
+        'src/lib/server/daily-rollup.ts',
+      ],
+      thresholds: {
+        lines: 80,
+      },
+    },
     // .env.local を自動ロードして DATABASE_URL などのローカル環境変数を有効化
     env: (() => {
       try {
