@@ -3,6 +3,7 @@ import { db } from './db'
 
 interface ProjectAccessResult {
   orgId: string
+  role: OrgRole
 }
 
 export type OrgAccessResult =
@@ -104,7 +105,7 @@ export async function assertProjectAccess(
 
   // OWNER/MANAGER는 project_members 상관없이 접근 가능
   if (orgMembership.role === 'OWNER' || orgMembership.role === 'MANAGER') {
-    return { orgId: project.orgId }
+    return { orgId: project.orgId, role: orgMembership.role }
   }
 
   // MEMBER/VIEWER는 project_members에 등록된 경우에만 접근 가능
@@ -112,7 +113,7 @@ export async function assertProjectAccess(
     throw new Error('Forbidden')
   }
 
-  return { orgId: project.orgId }
+  return { orgId: project.orgId, role: orgMembership.role }
 }
 
 interface DateRange {

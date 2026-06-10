@@ -22,7 +22,7 @@ import {
 export async function assertProjectAccessOrResponse(
   projectId: string,
   userId: string
-): Promise<{ orgId: string } | NextResponse> {
+): Promise<{ orgId: string; role: OrgRole } | NextResponse> {
   try {
     return await assertProjectAccess(projectId, userId)
   } catch (err) {

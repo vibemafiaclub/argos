@@ -1,8 +1,15 @@
 ---
 title: API 접근 제어 결함 — 임의 조직 가입, 세션 IDOR, MEMBER의 프로젝트 삭제
 created_at: 2026-06-10T03:40:00Z
-resolved: false
+resolved: true
+resolved_by: pending-push
 priority: P0
+status_notes: |
+  A1 (invite token guard, existing member idempotent pass) — done
+  A2 (session IDOR project check in GET/DELETE) — done
+  A3 (project DELETE role check OWNER/MANAGER only) — done
+  A4 (updateProjectForUser role check) — deferred to Tier 3
+  A5 (cli-poll 1-use token) — done
 related:
   - docs/findings/2026-06-10T0340-architecture-unintuitive.md
   - packages/web/src/lib/server/dashboard.ts
@@ -82,3 +89,15 @@ org 이관은 OWNER 전용인데 삭제는 무방비 — 일관성도 깨진다.
 - 타 프로젝트 MEMBER의 세션 GET/DELETE → 404/403
 - MEMBER의 프로젝트 DELETE/PATCH → 403
 - cli-poll 2회째 호출 → token 미반환
+
+## Resolution
+
+**A1** (`packages/web/src/app/api/orgs/[orgSlug]/members/route.ts`): 비멤버의 POST에 invite token 필수 가드 추가. 기존 멤버의 `ensureMembership` 호출은 멱등 OK 처리 유지. 초대 기반 플로우(invite → accept) 전환은 out-of-scope(별도 goal).
+
+**A2** (`sessions/[sessionId]/route.ts`): GET/DELETE 핸들러에 `assertProjectAccessOrResponse` 검증 추가. MEMBER/VIEWER가 project_members에 없는 프로젝트의 세션에 접근하면 404 반환.
+
+**A3** (`api/projects/[projectId]/route.ts`): DELETE 핸들러에 `canManageOrg` 역할 검사 추가. MEMBER/VIEWER는 403 반환.
+
+**A5** (`api/auth/cli-poll/route.ts`): 토큰 반환 직전 `cliAuthRequest.token = null` 처리로 1회 소비 구현. 2회째 폴링은 `pending: true` 반환.
+
+`dashboard.ts::assertProjectAccess`의 `ProjectAccessResult`에 `role` 필드 추가, `assertProjectAccessOrResponse` 반환 타입 업데이트.

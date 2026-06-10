@@ -3,6 +3,7 @@ import { UpdateProjectSchema } from '@argos/shared'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
 import { assertProjectAccessOrResponse } from '@/lib/server/dashboard-route-helper'
+import { canManageOrg, forbiddenByRole } from '@/lib/server/rbac'
 import { db } from '@/lib/server/db'
 import {
   getProjectForUser,
@@ -99,6 +100,10 @@ export async function DELETE(
 
     const access = await assertProjectAccessOrResponse(projectId, userId)
     if (access instanceof NextResponse) return access
+
+    if (!canManageOrg(access.role)) {
+      return forbiddenByRole(access.role, 'MANAGER 이상')
+    }
 
     await db.project.delete({ where: { id: projectId } })
 
