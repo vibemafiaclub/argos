@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import type { SessionDetail, SessionTimelineUsage } from '@argos/shared'
 import { db } from '@/lib/server/db'
 import { requireAuth } from '@/lib/server/auth-helper'
@@ -167,7 +168,17 @@ export async function DELETE(
       return forbiddenByRole(access.role, '본인 세션만 삭제 가능')
     }
 
-    await db.claudeSession.delete({ where: { id: sessionId } })
+    try {
+      await db.claudeSession.delete({ where: { id: sessionId } })
+    } catch (err) {
+      // 동시 삭제 경쟁: 존재 확인 후 delete 사이에 다른 요청이 먼저 지웠으면 P2025 —
+      // 삭제 의도는 이미 달성됐으므로 멱등하게 204 처리
+      if (
+        !(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025')
+      ) {
+        throw err
+      }
+    }
 
     return new NextResponse(null, { status: 204 })
   } catch (err) {
