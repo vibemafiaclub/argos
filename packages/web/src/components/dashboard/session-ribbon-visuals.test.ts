@@ -81,4 +81,29 @@ describe('segmentVisuals', () => {
     expect(result.bg).toBe('bg-brand-2')
     expect(result.style.flex).toBe('1 0 6px')
   })
+
+  const growOf = (flex: string) => Number(flex.split(' ')[0])
+
+  it('case 8 (plain tool, content=\'\'): length=0 → flex-grow === 0', () => {
+    const result = segmentVisuals(makeTool({ content: '' }))
+    expect(growOf(result.style.flex as string)).toBe(0)
+  })
+
+  it('case 9 (plain tool, content.length===500): threshold 경계(이하) → flex-grow === 0', () => {
+    const result = segmentVisuals(makeTool({ content: 'a'.repeat(500) }))
+    expect(growOf(result.style.flex as string)).toBe(0)
+  })
+
+  it('case 10 (plain tool, content.length===501): threshold 초과 → flex-grow > 0', () => {
+    const result = segmentVisuals(makeTool({ content: 'a'.repeat(501) }))
+    expect(growOf(result.style.flex as string)).toBeGreaterThan(0)
+  })
+
+  it('case 11 (plain tool, 단조 증가): content.length 1000 > 501 → grow(A) >= grow(B)', () => {
+    const resultA = segmentVisuals(makeTool({ content: 'a'.repeat(1000) }))
+    const resultB = segmentVisuals(makeTool({ content: 'a'.repeat(501) }))
+    expect(growOf(resultA.style.flex as string)).toBeGreaterThanOrEqual(
+      growOf(resultB.style.flex as string),
+    )
+  })
 })
