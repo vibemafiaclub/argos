@@ -2,6 +2,7 @@ import 'server-only'
 
 import bcrypt from 'bcryptjs'
 import { createHash, randomBytes } from 'crypto'
+import type { TokenSource } from '@prisma/client'
 import { db } from './db'
 import { signJwt } from './jwt'
 
@@ -20,7 +21,10 @@ export interface AuthResult {
   user: AuthResultUser
 }
 
-async function issueAuthResultForUser(user: AuthResultUser): Promise<AuthResult> {
+async function issueAuthResultForUser(
+  user: AuthResultUser,
+  source: TokenSource = 'CLI',
+): Promise<AuthResult> {
   const token = await signJwt(user.id)
   const tokenHash = createHash('sha256').update(token).digest('hex')
 
@@ -28,20 +32,24 @@ async function issueAuthResultForUser(user: AuthResultUser): Promise<AuthResult>
     data: {
       userId: user.id,
       tokenHash,
+      source,
     },
   })
 
   return { token, user }
 }
 
-export async function issueUserAuthResult(userId: string): Promise<AuthResult | null> {
+export async function issueUserAuthResult(
+  userId: string,
+  source: TokenSource = 'WEB',
+): Promise<AuthResult | null> {
   const user = await db.user.findUnique({
     where: { id: userId },
     select: { id: true, email: true, name: true, createdAt: true },
   })
   if (!user) return null
 
-  return issueAuthResultForUser(user)
+  return issueAuthResultForUser(user, source)
 }
 
 /**
@@ -49,10 +57,10 @@ export async function issueUserAuthResult(userId: string): Promise<AuthResult | 
  * 자격 증명이 유효하면 새 JWT를 발급하고 CliToken을 생성한 뒤 반환한다.
  * 실패 시 null 반환 (호출 측에서 401 등으로 매핑).
  */
-export async function loginUser(input: {
-  email: string
-  password: string
-}): Promise<AuthResult | null> {
+export async function loginUser(
+  input: { email: string; password: string },
+  source: TokenSource = 'WEB',
+): Promise<AuthResult | null> {
   const { email, password } = input
 
   const user = await db.user.findUnique({ where: { email } })
@@ -61,12 +69,10 @@ export async function loginUser(input: {
   const valid = await bcrypt.compare(password, user.passwordHash)
   if (!valid) return null
 
-  return issueAuthResultForUser({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    createdAt: user.createdAt,
-  })
+  return issueAuthResultForUser(
+    { id: user.id, email: user.email, name: user.name, createdAt: user.createdAt },
+    source,
+  )
 }
 
 /**

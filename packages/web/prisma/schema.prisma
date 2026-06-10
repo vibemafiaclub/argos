@@ -136,13 +136,20 @@ model PasswordResetToken {
 // ─── CliToken ──────────────────────────────────────────────────────────────
 // ~/.argos/config.json에 저장된 장기 JWT의 revocation 관리
 
+enum TokenSource {
+  CLI
+  WEB
+  IMPERSONATION
+}
+
 model CliToken {
-  id         String    @id @default(cuid())
-  userId     String    @map("user_id")
-  tokenHash  String    @unique @map("token_hash")  // SHA-256(JWT), revocation 체크용
-  createdAt  DateTime  @default(now()) @map("created_at")
-  lastUsedAt DateTime? @map("last_used_at")
-  revokedAt  DateTime? @map("revoked_at")
+  id         String      @id @default(cuid())
+  userId     String      @map("user_id")
+  tokenHash  String      @unique @map("token_hash")  // SHA-256(JWT), revocation 체크용
+  source     TokenSource @default(CLI)               // 토큰 발급 경로
+  createdAt  DateTime    @default(now()) @map("created_at")
+  lastUsedAt DateTime?   @map("last_used_at")
+  revokedAt  DateTime?   @map("revoked_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
