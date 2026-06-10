@@ -236,6 +236,12 @@ for goal_md in "${GOALS[@]}"; do
 done
 
 if [ "$OVERALL_PASS" = true ]; then
+  if [ "${GATES_SKIP_DEEP}" = "1" ]; then
+    echo "ALL_DONE" > "$ACTIVE_FILE"
+    echo "[SHALLOW PASS — deep gates skipped] All shallow gates pass, but test/build gates were not run."
+    echo "Re-run with GATES_SKIP_DEEP=0 for a full verification."
+    exit 1
+  fi
   echo "ALL_DONE" > "$ACTIVE_FILE"
   echo "🎉 ALL GOALS ACHIEVED. Every gate of every goal passes."
   exit 0

@@ -1,8 +1,14 @@
 ---
 title: 품질 게이트 3중 누수 — CI 미실행, 원격 DB 테스트, shallow 성공 선언
 created_at: 2026-06-10T03:40:00Z
-resolved: false
+resolved: partial
+resolved_by: pending-push
 priority: P0
+status_notes: |
+  G2 (vitest.config.ts allowlist guard) — done
+  G1 (ci.yml: web test + lint + typecheck + postgres service) — done, CI verification pending push
+  G3 (completion-check.sh shallow-pass exit 1) — done
+  G4–G9: out-of-scope for this cycle or lower priority
 related:
   - .github/workflows/ci.yml
   - scripts/completion-check.sh
@@ -121,3 +127,11 @@ vitest config에 `DATABASE_URL` localhost-allowlist 가드를 넣으면 원격 D
   접속이 불가능함(allowlist 가드 존재).
 - `GATES_SKIP_DEEP=1 bash scripts/completion-check.sh` 출력에 "ALL GOALS
   ACHIEVED" 대신 shallow-pass 구분 문구.
+
+## Resolution
+
+**G2** (`packages/web/vitest.config.ts`): DATABASE_URL allowlist 가드 추가. localhost/127.0.0.1 이외의 호스트를 가리키면 프로세스를 exit(1)로 종료해 원격 Supabase DB에 대한 테스트 실행을 구조적으로 차단.
+
+**G1** (`.github/workflows/ci.yml`): postgres:16-alpine service container 추가, `DATABASE_URL=postgresql://argos:argos@localhost:5432/argos` 환경변수 설정. `pnpm -r run typecheck`, `pnpm -r run lint`, `prisma migrate deploy`, `pnpm --filter @argos/web test` 스텝 추가.
+
+**G3** (`scripts/completion-check.sh`): `GATES_SKIP_DEEP=1` 시 "ALL GOALS ACHIEVED" 대신 "[SHALLOW PASS — deep gates skipped]" + exit 1 반환으로 수정. 에이전트가 shallow pass를 완료 신호로 오인하는 경로 차단.
