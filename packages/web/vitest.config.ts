@@ -1,6 +1,20 @@
 import path from 'node:path'
 import { defineConfig } from 'vitest/config'
 
+// Guard: DB-dependent tests must run against localhost only.
+// If DATABASE_URL points to a remote host, bail early to prevent writes
+// to the shared Supabase instance.
+const dbUrl = process.env.DATABASE_URL ?? ''
+if (dbUrl && !/(localhost|127\.0\.0\.1)/.test(dbUrl)) {
+  console.error(
+    '❌ vitest: DATABASE_URL must point to localhost or 127.0.0.1 in tests.\n' +
+    '   Got: ' + dbUrl + '\n' +
+    '   Start a local Postgres with: docker-compose up -d postgres\n' +
+    '   Then set DATABASE_URL=postgresql://argos:argos@localhost:5432/argos',
+  )
+  process.exit(1)
+}
+
 export default defineConfig({
   resolve: {
     alias: {

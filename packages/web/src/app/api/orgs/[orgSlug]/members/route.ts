@@ -116,6 +116,14 @@ export async function POST(
       return NextResponse.json({ ok: true })
     }
 
+    // Non-member must present a valid invite token.
+    // Short-term guard: full invite-issuance flow is a separate goal.
+    const body = await req.json().catch(() => ({} as Record<string, unknown>))
+    const inviteToken = typeof body.inviteToken === 'string' ? body.inviteToken : null
+    if (!inviteToken) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
     // OrgMembership(MEMBER) 생성
     await db.orgMembership.create({
       data: {

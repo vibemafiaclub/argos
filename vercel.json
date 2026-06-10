@@ -1,7 +1,7 @@
 {
   "framework": "nextjs",
   "installCommand": "cd ../.. && pnpm install",
-  "buildCommand": "cd ../.. && if [ \"$VERCEL_ENV\" = \"production\" ]; then pnpm --filter=@argos/web db:migrate; fi && pnpm turbo build --filter=@argos/web",
+  "buildCommand": "cd ../.. && pnpm turbo build --filter=@argos/web",
   "outputDirectory": ".next",
   "regions": ["icn1"]
 }

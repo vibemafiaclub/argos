@@ -30,6 +30,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ pending: true })
     }
 
+    // Consume the token (1-use): clear it so subsequent polls return pending.
+    await db.cliAuthRequest.update({
+      where: { id: request.id },
+      data: { token: null },
+    })
+
     return NextResponse.json({ token: request.token })
   } catch (err) {
     return handleRouteError(err)

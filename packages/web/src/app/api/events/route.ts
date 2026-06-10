@@ -156,6 +156,33 @@ export async function POST(req: Request) {
                 timestamp: new Date(u.timestamp),
               })),
             })
+
+            // Invalidate DailyProjectStat cache for any past dates in the inserted records.
+            // Ensures late-arriving per-turn data is reflected on next dashboard load.
+            const todayMs = Date.UTC(
+              new Date().getUTCFullYear(),
+              new Date().getUTCMonth(),
+              new Date().getUTCDate(),
+            )
+            const pastDates = [
+              ...new Set(
+                payload.usagePerTurn
+                  .map((u) => {
+                    const d = new Date(u.timestamp)
+                    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+                  })
+                  .filter((ms) => ms < todayMs)
+                  .map((ms) => new Date(ms).toISOString()),
+              ),
+            ]
+            if (pastDates.length > 0) {
+              await db.dailyProjectStat.deleteMany({
+                where: {
+                  projectId: payload.projectId,
+                  date: { in: pastDates.map((iso) => new Date(iso)) },
+                },
+              })
+            }
           } else if (payload.usage) {
             // 하위호환: usagePerTurn이 없으면 기존 단일 insert
             await db.usageRecord.create({

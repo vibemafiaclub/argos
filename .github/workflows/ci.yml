@@ -8,6 +8,27 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: argos
+          POSTGRES_PASSWORD: argos
+          POSTGRES_DB: argos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AUTH_SECRET: "ci-placeholder-secret-min-32-chars-here"
+      JWT_SECRET: "ci-placeholder-jwt-secret-min-32-chars"
+      DATABASE_URL: "postgresql://argos:argos@localhost:5432/argos"
+      DIRECT_URL: "postgresql://argos:argos@localhost:5432/argos"
+      ADMIN_USERNAME: "ci-admin"
+      ADMIN_PASSWORD: "ci-admin-password"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -19,12 +40,9 @@ jobs:
       - run: pnpm --filter @argos/web exec prisma generate
       - run: pnpm --filter @argos/shared build
       - run: pnpm --filter argos-ai build
+      - run: pnpm -r run typecheck
+      - run: pnpm -r run lint
       - run: pnpm --filter argos-ai test
+      - run: pnpm --filter @argos/web exec prisma migrate deploy
+      - run: pnpm --filter @argos/web test
       - run: pnpm --filter @argos/web build
-        env:
-          AUTH_SECRET: "ci-placeholder-secret-min-32-chars-here"
-          JWT_SECRET: "ci-placeholder-jwt-secret-min-32-chars"
-          DATABASE_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder"
-          DIRECT_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder"
-          ADMIN_USERNAME: "ci-admin"
-          ADMIN_PASSWORD: "ci-admin-password"

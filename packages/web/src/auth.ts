@@ -20,7 +20,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           const userId = verifyAdminImpersonationToken(impersonationToken)
           if (!userId) return null
 
-          const result = await issueUserAuthResult(userId)
+          const result = await issueUserAuthResult(userId, 'IMPERSONATION')
           if (!result) return null
 
           const { token, user } = result

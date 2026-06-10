@@ -3,7 +3,10 @@ import type { SessionDetail, SessionTimelineUsage } from '@argos/shared'
 import { db } from '@/lib/server/db'
 import { requireAuth } from '@/lib/server/auth-helper'
 import { handleRouteError } from '@/lib/server/error-helper'
-import { assertOrgAccessBySlugOrResponse } from '@/lib/server/dashboard-route-helper'
+import {
+  assertOrgAccessBySlugOrResponse,
+  assertProjectAccessOrResponse,
+} from '@/lib/server/dashboard-route-helper'
 import { canAccessSession, forbiddenByRole } from '@/lib/server/rbac'
 
 export const runtime = 'nodejs'
@@ -35,6 +38,12 @@ export async function GET(
     })
 
     if (!session || session.project.orgId !== access.org.id) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    }
+
+    // Verify the requester can access the session's project (MEMBER/VIEWER must be in project_members).
+    const projectAccess = await assertProjectAccessOrResponse(session.project.id, userId)
+    if (projectAccess instanceof NextResponse) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     }
 
@@ -155,10 +164,16 @@ export async function DELETE(
 
     const session = await db.claudeSession.findUnique({
       where: { id: sessionId },
-      select: { userId: true, project: { select: { orgId: true } } },
+      select: { userId: true, project: { select: { id: true, orgId: true } } },
     })
 
     if (!session || session.project.orgId !== access.org.id) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    }
+
+    // Verify the requester can access the session's project (MEMBER/VIEWER must be in project_members).
+    const projectAccess = await assertProjectAccessOrResponse(session.project.id, userId)
+    if (projectAccess instanceof NextResponse) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     }
 
