@@ -129,14 +129,21 @@ export async function registerUser(input: {
 
   const passwordHash = await bcrypt.hash(password, 10)
 
-  const user = await db.user.create({
-    data: { email, passwordHash, name },
-  })
+  try {
+    const user = await db.user.create({
+      data: { email, passwordHash, name },
+    })
 
-  return issueAuthResultForUser({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    createdAt: user.createdAt,
-  })
+    return issueAuthResultForUser({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      createdAt: user.createdAt,
+    })
+  } catch (err) {
+    // Race condition: concurrent registrations with same email — P2002 unique constraint
+    const code = (err as { code?: string }).code
+    if (code === 'P2002') return 'EMAIL_IN_USE'
+    throw err
+  }
 }
