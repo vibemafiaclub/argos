@@ -1,8 +1,14 @@
 ---
 title: 기술 부채 인벤토리 — 배포 파이프라인, 의존성, 문서 드리프트, 정리 대상
 created_at: 2026-06-10T03:40:00Z
-resolved: false
+resolved: partial
+resolved_by: pending-push
 priority: P1
+status_notes: |
+  D1 (vercel.json buildCommand db:migrate 제거 + 분리 문서) — done
+  D2 (next-auth 5.0.0-beta.30 고정) — done
+  D3 (shadcn devDependencies 이동) — done
+  D4–D12: Tier 3 처리 대상
 related:
   - docs/findings/2026-06-10T0340-quality-gate-gaps.md
   - docs/findings/2026-06-10T0340-architecture-unintuitive.md
@@ -107,3 +113,11 @@ hook 검증 스크래치 `cc-test/`(hook-events.jsonl 등)도 커밋돼 있음.
   파생으로 대체.
 - D5: `grep -c "packages/api" docs/code-architecture.md` → 0.
 - D11: `git ls-files persuasion-data/runs | wc -l` → 0.
+
+## Resolution (P1)
+
+**D1** (`vercel.json` + `packages/web/vercel.json`): buildCommand에서 `prisma migrate deploy` 제거. `docs/deploy-migration-separation.md` 작성 — GitHub Actions pre-deploy job 방식으로 분리 권장.
+
+**D2** (`packages/web/package.json`): `next-auth` `^5.0.0-beta` → `5.0.0-beta.30` 정확 버전 고정. pnpm-lock.yaml 재생성.
+
+**D3** (`packages/web/package.json`): `shadcn` dependencies → devDependencies 이동. `pnpm install` 후 `pnpm why shadcn` devDependencies 경로만 표시 확인.
