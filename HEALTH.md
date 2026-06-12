@@ -1,6 +1,7 @@
 # Argos 저장소 건강 리포트
 
 > 작성: 2026-06-12, 격리 worktree(`agent/spike-3-202606111837`) 기준.
+> 갱신: 2026-06-12 일일 건강 스캔(`agent/2026-06-12-001`) — §3 테스트 현황, §4 추가 기록, §5 부채 #7, 부록 갱신.
 > 모든 경로는 저장소 루트 상대 경로다.
 
 ## 1. 개요
@@ -20,11 +21,11 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 
 실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일).
 
-| 패키지 | 이번 작업 전 | 이번 작업 후 | 비고 |
-|---|---|---|---|
-| `packages/shared` | **0개 (인프라 없음)** | **42개** (4 파일) | vitest 신규 셋업 |
-| `packages/cli` | 142개 (11 파일) | **149개** (12 파일) | +7 (`src/lib/config.test.ts`) |
-| `packages/web` | 154개 (13 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | **198개** (15 파일) | +44 (`week-range.test.ts` 21, `format.test.ts` 23) |
+| 패키지 | spike#3 이전 | spike#3 이후 | 일일 스캔(06-12) 이후 | 비고 |
+|---|---|---|---|---|
+| `packages/shared` | **0개 (인프라 없음)** | 42개 (4 파일) | **42개** | vitest는 spike#3에서 신규 셋업 |
+| `packages/cli` | 142개 (11 파일) | 149개 (12 파일) | **149개** | +7 (`src/lib/config.test.ts`) |
+| `packages/web` | 154개 (13 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | 198개 (15 파일) | **238개** (17 파일) | 일일 스캔에서 +40 (`admin-session.test.ts` 27, `slug.test.ts` 13) |
 
 ### packages/shared — 신규 셋업
 - 추가: `vitest.config.ts`, `package.json`에 `test` 스크립트 + vitest devDep, `tsconfig.build.json`(테스트 파일을 dist 빌드에서 제외 — cli의 기존 패턴 동일 적용, build 스크립트가 `tsc` → `tsc -p tsconfig.build.json`로 변경됨. dist 산출물은 동일).
@@ -40,7 +41,9 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 - 기존: cost 계산, RBAC, rollup 집계(`daily-rollup.test.ts`), 이벤트 derive, API 응답 계약 등 154개. DB 의존 13개(`skill-aggregation.test.ts` 등)는 `DATABASE_URL` 미설정 시 skip — 로컬 기본 실행/CI postgres에서만 풀 실행.
 - 이번 추가 ①: `src/lib/server/week-range.ts` **신규 분리** — `weekly-report.ts`는 `import 'server-only'`라 vitest에서 import 불가(기존 `weekly-report.test.ts` 주석에 명시된 제약). 순수 주차 계산(`getWeekRangeForDate`/`parseWeekParam`/`formatWeekLabel`)만 분리하고 `weekly-report.ts`가 re-export하여 호출자(`api/orgs/[orgSlug]/reports/route.ts`) 무변경. 동작 동일성은 golden/경계/roundtrip 21개 테스트로 고정.
 - 이번 추가 ②: `src/lib/format.test.ts` — 사용자에게 직접 보이는 토큰/비용/시간 포맷터 23개 (TZ 비의존 분기만; 로컬 시간 렌더링은 브라우저 TZ 의존이 의도된 동작).
-- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`, `slug.ts`, `dashboard.ts`의 `parsePagination`, `api-client.ts`, `session-files.ts`.
+- 일일 스캔(06-12) 추가 ③: `src/lib/server/admin-auth.ts`의 HMAC 세션 쿠키·impersonation 토큰 로직을 `admin-session.ts`로 **순수 분리**(week-range와 동일 수법 — `server-only`+env 의존 때문에 분리 없이는 테스트 불가). `admin-auth.ts`는 env 값을 주입하는 위임 래퍼로 축소, export·검증 순서·와이어 포맷 전부 동일. 동일성은 골든 테스트(서명을 테스트 안에서 node:crypto로 독립 재계산) + 분기별 27개 테스트로 고정 — 관리자 인증 게이트가 처음으로 테스트 커버 안에 들어왔다.
+- 일일 스캔(06-12) 추가 ④: `src/lib/server/slug.test.ts` 13개 — `generateSlug` 정규식 체인(org/project URL 식별자) 고정. 한글만 입력→빈 문자열→random fallback 경로 포함.
+- 남은 구멍: `auth-actions.ts`/`password-reset.ts`(TTL 경계 — DB 트랜잭션과 얽혀 있어 분리 필요), `jwt.ts`(jose 래퍼 — env 모듈 의존), `dashboard.ts`의 `parsePagination`, `api-client.ts`, `session-files.ts`, `slug.ts`의 `generateUnique*Slug`(DB 의존 — 충돌 suffix 루프는 통합 테스트 영역).
 - **기존 테스트 수정: 없음** (전부 원형 유지).
 
 ## 4. 리스크 상위 5
@@ -62,6 +65,11 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 
 추가로 기록 (상위 5 미만): `packages/web/src/lib/format.ts:70-77` `formatRelativeTime`은 timestamp가 base보다 빠르면 `"+-1m"` 같은 비정상 문자열을 렌더한다 — `format.test.ts`에 `TODO(bug)`로 고정. 같은 파일의 `formatTokens(999_999) → "1000.0K"`, `formatDurationMs(59_999) → "60s"` 경계 quirk도 동일하게 고정해 두었다.
 
+일일 스캔(06-12)에서 새로 발견·고정한 quirk 2건 (`admin-session.test.ts`에 `TODO(bug)`로 고정, 동작은 미수정):
+
+- **멀티바이트 관리자 비밀번호 영구 잠금**: `admin-session.ts`의 `safeEqual`은 512**바이트** 초과 입력을 동일 값이어도 무조건 거부하는데(DoS 가드), `env.ts:14`는 `ADMIN_PASSWORD`를 512**문자**까지 허용한다. 한글 등 멀티바이트 문자로 171자만 넘어도(UTF-8 513바이트↑) env 검증은 통과하지만 `verifyAdminCredentials`가 항상 false — 관리자 로그인이 영구 실패하고 원인을 알 수 없다. 수정은 env 쪽을 byte-length refine으로 좁히면 끝(S).
+- **impersonation userId에 `.` 가드 부재**: `createAdminImpersonationToken`은 userId에 `.`이 들어가면 6파트 토큰을 만들어 자기 자신도 검증(`parts.length !== 5`)에 실패한다. `ADMIN_USERNAME`은 `env.ts:11`이 `.`을 차단하지만 userId 쪽은 어떤 레이어에도 가드가 없다 — 현재 `User.id`가 cuid라 사실상 안전하나, id 체계가 바뀌면 impersonation이 조용히 전멸한다.
+
 ## 5. 부채와 빠른 개선 기회
 
 | # | 항목 | 크기 | 근거 |
@@ -72,7 +80,7 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 | 4 | CLI hook.ts 도달 불가 SubagentStop 분기 삭제 (`docs/findings/...code-quality-issues.md` Q4) | **S** | dead code |
 | 5 | `~/.argos/config.json` 생성 시 `mode: 0o600` 지정 (`packages/cli/src/lib/config.ts:62`) | **S** | R2 완화 1단계 |
 | 6 | API 에러 응답 형태 단일화(`jsonError` 헬퍼) + 문자열 분기 제거 (Q1/Q2) | **M** | R4 해소 |
-| 7 | `admin-auth.ts` 쿠키 파싱·`auth-actions.ts`/`password-reset.ts` TTL 경계를 순수 함수로 분리 후 단위 테스트 (이번 작업의 week-range 분리와 동일 수법) | **M** | 보안 게이트 무방비 |
+| 7 | ~~`admin-auth.ts` 쿠키 파싱~~(06-12 일일 스캔에서 `admin-session.ts` 분리+27테스트로 완료) · `auth-actions.ts`/`password-reset.ts` TTL 경계 분리+단위 테스트는 잔여 | **S**(잔여분) | 보안 게이트 무방비 → 관리자 게이트는 커버됨 |
 | 8 | 비용 집계를 정수 마이크로달러 또는 decimal로 전환 | **M** | R3 해소; UsageRecord 스키마 변경 수반 |
 | 9 | ingestion 경로 관측성: silent catch에 구조화 로그/메트릭 추가 (Q3) + transcript 포맷 버전 감지 | **M** | R4·R5 완화 |
 | 10 | CLI→API 계약 테스트 (실 서버 또는 스키마 기반) — `api-client.ts`/`auth-flow.ts`의 본질적 커버리지 | **L** | 목 없이는 단위 테스트 불가한 영역 |
@@ -84,3 +92,10 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 - 버그로 보이는 동작 3건(W53 overflow, TZ 의존, `"+-1m"`)은 **고치지 않고** 현재 동작 기준으로 테스트에 `TODO(bug)` 주석과 함께 고정했다 (임무 규칙 준수).
 - 기존 테스트 파일은 한 글자도 수정하지 않았다.
 - `pnpm-lock.yaml` diff가 커 보이는 것(±약 985줄)은 vitest 추가 외에 pnpm이 lockfile을 재작성하며 모든 resolution 항목의 중복 `tarball:` URL 필드를 제거했기 때문이다(integrity 해시는 전부 유지 — `--frozen-lockfile` 설치에 영향 없음). 의미 있는 변경은 `packages/shared` importer의 vitest 항목뿐이다.
+
+### 일일 건강 스캔 2026-06-12 (`agent/2026-06-12-001`)
+
+- 직전 spike#3 커밋(7241f61)이 HEAD라 리포트 본문(§1·§2·§4 상위 5)은 코드 기준 그대로 유효함을 확인 — T2-A/B/C 수정 3건(94ff630·27da509·8db3347)은 모두 spike#3 분기 전(06-10)에 들어가 이미 반영되어 있었다.
+- **기능 코드 변경은 1건뿐**: `packages/web/src/lib/server/admin-auth.ts`의 HMAC 서명/검증 알고리즘을 `admin-session.ts`로 이동하고 admin-auth는 env 값(`ADMIN_USERNAME`/`ADMIN_COOKIE_SECRET`/TTL 상수)을 주입하는 위임 호출로 변경. `now`/`nonce` 인자는 옵션이며 기본값(`Date.now()`/`randomBytes`)일 때 분리 전과 동일 경로다. 검증 순서(parts→서명→username→만료)와 와이어 포맷을 골든 테스트로 고정해 동일성을 증명했다. 호출처 7곳(`auth.ts`, `admin/page.tsx`, `api/admin/*` 5개)은 무변경.
+- 새 devDependency 없음 → `pnpm-lock.yaml` 무변경. 기존 테스트 파일 무수정.
+- 자가 검증: `pnpm install` ✓ / `pnpm --filter @argos/shared build` ✓ / `pnpm -r test` ✓ (shared 42, cli 149, web 225 passed + 13 DB-skip) / `pnpm typecheck` ✓ (4/4) / `pnpm --filter @argos/web lint` ✓.
