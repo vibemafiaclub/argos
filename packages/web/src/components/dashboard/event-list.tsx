@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, memo, type ReactElement } from "react";
 import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
@@ -52,7 +52,7 @@ function formatElapsed(timestamp: string, sessionStartedAt: string): string {
 function buildFlatRows(
   events: TimelineEvent[],
   expandedGroups: Set<number>,
-  selectedIdx: number,
+  selectedGroupFirstIdx: number | null,
 ): FlatRow[] {
   const groups = buildTimelineGroups(events);
   const rows: FlatRow[] = [];
@@ -80,9 +80,8 @@ function buildFlatRows(
       continue;
     }
     const firstIdx = group.items[0].idx;
-    const lastIdx = group.items[group.items.length - 1].idx;
-    const containsSelected = selectedIdx >= firstIdx && selectedIdx <= lastIdx;
-    const isExpanded = expandedGroups.has(firstIdx) || containsSelected;
+    const isExpanded =
+      expandedGroups.has(firstIdx) || selectedGroupFirstIdx === firstIdx;
     rows.push({
       kind: "groupHeader",
       key: `gh-${firstIdx}`,
@@ -106,6 +105,23 @@ function buildFlatRows(
     }
   }
   return rows;
+}
+
+function getSelectedGroupFirstIdx(
+  events: TimelineEvent[],
+  selectedIdx: number,
+): number | null {
+  const groups = buildTimelineGroups(events);
+  for (const group of groups) {
+    if (group.kind === "single" || group.items.length <= 1) continue;
+
+    const firstIdx = group.items[0].idx;
+    const lastIdx = group.items[group.items.length - 1].idx;
+    if (selectedIdx >= firstIdx && selectedIdx <= lastIdx) {
+      return firstIdx;
+    }
+  }
+  return null;
 }
 
 function getSingleLabel(event: TimelineEvent): string {
@@ -217,7 +233,7 @@ function Row({
   sessionStartedAt,
   onSelect,
   onToggleGroup,
-}: RowComponentProps<RowProps>) {
+}: RowComponentProps<RowProps>): ReactElement | null {
   const row = rows[index];
   if (!row) return null;
 
@@ -259,6 +275,30 @@ function Row({
   );
 }
 
+type EventRowComponent = (
+  props: RowComponentProps<RowProps>,
+) => ReactElement | null;
+
+const MemoizedRow = memo(Row, (prevProps, nextProps) => {
+  if (prevProps.index !== nextProps.index) return false;
+  if (prevProps.style !== nextProps.style) return false;
+  if (prevProps.sessionStartedAt !== nextProps.sessionStartedAt) return false;
+  if (prevProps.onSelect !== nextProps.onSelect) return false;
+  if (prevProps.onToggleGroup !== nextProps.onToggleGroup) return false;
+
+  const prevRow = prevProps.rows[prevProps.index];
+  const nextRow = nextProps.rows[nextProps.index];
+
+  if (prevRow !== nextRow) return false;
+
+  const prevIsSelected = prevRow && prevRow.kind !== 'groupHeader' ? prevRow.idx === prevProps.selectedIdx : false;
+  const nextIsSelected = nextRow && nextRow.kind !== 'groupHeader' ? nextRow.idx === nextProps.selectedIdx : false;
+
+  if (prevIsSelected !== nextIsSelected) return false;
+
+  return true;
+}) as EventRowComponent;
+
 export function EventList({
   events,
   selectedIdx,
@@ -267,9 +307,13 @@ export function EventList({
   expandedGroups,
   onToggleGroup,
 }: EventListProps) {
+  const selectedGroupFirstIdx = useMemo(
+    () => getSelectedGroupFirstIdx(events, selectedIdx),
+    [events, selectedIdx],
+  );
   const rows = useMemo(
-    () => buildFlatRows(events, expandedGroups, selectedIdx),
-    [events, expandedGroups, selectedIdx],
+    () => buildFlatRows(events, expandedGroups, selectedGroupFirstIdx),
+    [events, expandedGroups, selectedGroupFirstIdx],
   );
 
   if (events.length === 0) {
@@ -282,7 +326,7 @@ export function EventList({
 
   return (
     <List
-      rowComponent={Row}
+      rowComponent={MemoizedRow}
       rowCount={rows.length}
       rowHeight={ROW_HEIGHT}
       rowProps={{
