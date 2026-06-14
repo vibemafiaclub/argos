@@ -1,7 +1,13 @@
 # Argos 저장소 건강 리포트
 
-> 작성: 2026-06-12, 격리 worktree(`agent/spike-3-202606111837`) 기준.
+> 최초 작성: 2026-06-12 (`agent/spike-3-202606111837`).
+> 최종 갱신: **2026-06-15 일일 건강 스캔** (`agent/2026-06-14-381`) — 전 패키지 재검증.
 > 모든 경로는 저장소 루트 상대 경로다.
+>
+> **이번 스캔 델타**: 앱 코드는 직전 스캔(2026-06-12) 이후 변경 없음(HEALTH.md 커밋이 HEAD,
+> 테스트 파일 목록 일치). 따라서 ①리스크/부채 섹션은 재검증 후 유지(드리프트한 라인 참조 1건만
+> 정정 — R4), ②테스트는 직전 스캔이 §3 구멍으로 명시했던 `dashboard.ts`의 순수 헬퍼
+> (`parsePagination`/`parseDateRange`)에 깨질 가치 있는 17개만 추가(결정 018 — 부록 참조).
 
 ## 1. 개요
 
@@ -18,13 +24,14 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 
 ## 3. 테스트 현황
 
-실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일).
+실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일). 2026-06-15 스캔 시점 전부 green
+(shared 42 / cli 149 / web 215, web 중 DB의존 13개는 로컬 Postgres 없으면 skip).
 
-| 패키지 | 이번 작업 전 | 이번 작업 후 | 비고 |
-|---|---|---|---|
-| `packages/shared` | **0개 (인프라 없음)** | **42개** (4 파일) | vitest 신규 셋업 |
-| `packages/cli` | 142개 (11 파일) | **149개** (12 파일) | +7 (`src/lib/config.test.ts`) |
-| `packages/web` | 154개 (13 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | **198개** (15 파일) | +44 (`week-range.test.ts` 21, `format.test.ts` 23) |
+| 패키지 | 06-12 스파이크 전 | 06-12 스파이크 후 | **06-15 일일 스캔 후** | 비고 |
+|---|---|---|---|---|
+| `packages/shared` | 0개 (인프라 없음) | 42개 (4 파일) | **42개** (변동 없음) | 추가 가치 있는 순수 로직 없음(types 선언뿐) |
+| `packages/cli` | 142개 (11 파일) | 149개 (12 파일) | **149개** (변동 없음) | 남은 구멍은 네트워크 통합 지점뿐(전략상 단위 목 부적합) |
+| `packages/web` | 154개 (13 파일) | 198개 (15 파일) | **215개** (16 파일) | +17 (`dashboard.test.ts`: `parsePagination` 12, `parseDateRange` 5) |
 
 ### packages/shared — 신규 셋업
 - 추가: `vitest.config.ts`, `package.json`에 `test` 스크립트 + vitest devDep, `tsconfig.build.json`(테스트 파일을 dist 빌드에서 제외 — cli의 기존 패턴 동일 적용, build 스크립트가 `tsc` → `tsc -p tsconfig.build.json`로 변경됨. dist 산출물은 동일).
@@ -39,9 +46,10 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 ### packages/web — 집계 로직 커버, 날짜·포맷팅이 무방비였음
 - 기존: cost 계산, RBAC, rollup 집계(`daily-rollup.test.ts`), 이벤트 derive, API 응답 계약 등 154개. DB 의존 13개(`skill-aggregation.test.ts` 등)는 `DATABASE_URL` 미설정 시 skip — 로컬 기본 실행/CI postgres에서만 풀 실행.
 - 이번 추가 ①: `src/lib/server/week-range.ts` **신규 분리** — `weekly-report.ts`는 `import 'server-only'`라 vitest에서 import 불가(기존 `weekly-report.test.ts` 주석에 명시된 제약). 순수 주차 계산(`getWeekRangeForDate`/`parseWeekParam`/`formatWeekLabel`)만 분리하고 `weekly-report.ts`가 re-export하여 호출자(`api/orgs/[orgSlug]/reports/route.ts`) 무변경. 동작 동일성은 golden/경계/roundtrip 21개 테스트로 고정.
-- 이번 추가 ②: `src/lib/format.test.ts` — 사용자에게 직접 보이는 토큰/비용/시간 포맷터 23개 (TZ 비의존 분기만; 로컬 시간 렌더링은 브라우저 TZ 의존이 의도된 동작).
-- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`, `slug.ts`, `dashboard.ts`의 `parsePagination`, `api-client.ts`, `session-files.ts`.
-- **기존 테스트 수정: 없음** (전부 원형 유지).
+- 06-12 추가 ②: `src/lib/format.test.ts` — 사용자에게 직접 보이는 토큰/비용/시간 포맷터 23개 (TZ 비의존 분기만; 로컬 시간 렌더링은 브라우저 TZ 의존이 의도된 동작).
+- **06-15 추가**: `src/lib/server/dashboard.test.ts` — `parsePagination`(12) + `parseDateRange`(5). `parsePagination`은 Prisma `skip`/`take`를 직접 결정하므로 clamp가 깨지면 무한정 쿼리(상한 붕괴)·음수 skip(page 가드 붕괴)이 무증상으로 샌다 — 직전 스캔이 §3 구멍으로 콕 집어둔 곳이다. `dashboard.ts`가 `./db`를 import하지만 PrismaClient 생성이 지연이고 `./env`는 import하지 않아, **추출 없이 직접 import**로 DATABASE_URL 없이 고정 가능했다(소스 변경 0). `parseDateRange`는 `now()`를 내부 캡처하므로 시간 비의존 분기만(종일 보정·`from>to` swap·잘못된 입력 fallback 유효성) 고정했다.
+- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`(`signJwt`/`verifyJwt` — 순수하나 `./env`가 모듈 로드 시 `EnvSchema.parse`로 throw → JWT_SECRET 등 미설정 시 import 불가, env 주입 또는 분리 필요), `slug.ts`, `api-client.ts`(네트워크 통합 지점 — 전략상 목 부적합), `session-files.ts`.
+- **기존 테스트 수정: 없음** (전부 원형 유지). 06-15 스캔도 기존 파일 무수정.
 
 ## 4. 리스크 상위 5
 
@@ -55,7 +63,7 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 `packages/web/src/lib/server/cost.ts:24-29`(`(tokens / 1_000_000) * pricePerM` float 곱), `daily-rollup.ts:293,308`(`Number(u.cost_usd ?? 0)` 후 일별 합산), `getDailyRollupsForProjects`의 `prev.estimatedCostUsd += r.estimatedCostUsd` 반복 가산. 시나리오: 수개월 × 다수 프로젝트 합산 시 표시 비용과 원본 레코드 합 사이에 센트 단위 불일치 → 비용 대시보드 신뢰 하락. 단가 자체는 이번에 `packages/shared/src/constants/pricing.test.ts`로 고정했지만, 누적 오차는 decimal 처리 없인 남는다.
 
 ### R4. 에러를 문자열·silent catch로 다루는 ingestion/접근제어 경로 — **중간**
-이미 `docs/findings/2026-06-10T0340-code-quality-issues.md`에 Q1~Q3로 문서화되어 있고 **여전히 미해결**이다: ① API 에러 응답 형태가 3가지로 갈라져 클라이언트 파서가 메시지를 잃음(Q1), ② `packages/web/src/lib/server/dashboard-route-helper.ts:29-33`이 `err.message === 'Project not found'` 문자열 비교로 분기하고 그 외 모든 예외(DB 타임아웃 포함)를 403으로 뭉갬(Q2), ③ `packages/web/src/app/api/events/route.ts:197-199` ingestion silent catch — 토큰/메시지 유실이 무관측(Q3). 시나리오: DB 장애가 "권한 없음"으로 위장되어 디버깅 비용 폭증 + 데이터 유실을 아무도 모름.
+이미 `docs/findings/2026-06-10T0340-code-quality-issues.md`에 Q1~Q3로 문서화되어 있고 **여전히 미해결**이다: ① API 에러 응답 형태가 3가지로 갈라져 클라이언트 파서가 메시지를 잃음(Q1), ② `packages/web/src/lib/server/dashboard-route-helper.ts:29-33`이 `err.message === 'Project not found'` 문자열 비교로 분기하고 그 외 모든 예외(DB 타임아웃 포함)를 403으로 뭉갬(Q2), ③ `packages/web/src/app/api/events/route.ts:224-226` ingestion 메시지 기록 fire-and-forget `catch {}` — 토큰/메시지 유실이 무관측(Q3). *(06-15 스캔: 라인 참조 197-199→224-226 정정, 동작은 동일.)* 시나리오: DB 장애가 "권한 없음"으로 위장되어 디버깅 비용 폭증 + 데이터 유실을 아무도 모름.
 
 ### R5. Claude Code transcript 포맷 가정의 조용한 드리프트 — **중간**
 `packages/cli/src/lib/transcript.ts`는 transcript JSONL의 type 문자열(`'queue-operation'` 등)과 content 형태를 하드코딩으로 가정하고, 안 맞는 줄은 per-line try/catch로 **조용히 버린다**. `commands/hook.ts`의 agent 감지도 `transcript_path`에 `/.codex/` 포함 여부 휴리스틱이다. 시나리오: Claude Code/Codex가 transcript 스키마를 바꾸면 에러 없이 토큰·메시지 수집량만 줄어들고(훅은 항상 exit 0), 대시보드 수치가 무증상으로 부정확해진다. 기존 테스트(`transcript.test.ts` 24개 등)가 현재 포맷은 고정하지만 포맷 버전 감지/관측 수단이 없다.
@@ -77,7 +85,19 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 | 9 | ingestion 경로 관측성: silent catch에 구조화 로그/메트릭 추가 (Q3) + transcript 포맷 버전 감지 | **M** | R4·R5 완화 |
 | 10 | CLI→API 계약 테스트 (실 서버 또는 스키마 기반) — `api-client.ts`/`auth-flow.ts`의 본질적 커버리지 | **L** | 목 없이는 단위 테스트 불가한 영역 |
 
-## 부록: 이번 작업에서의 판단 기록
+## 부록: 판단 기록
+
+### 2026-06-15 일일 건강 스캔 (결정 018 적용)
+
+- **테스트 보강 판단**: "깨지면 의미 있는 것을 알게 되는" 곳에만 추가한다는 기준(결정 018)으로 전 패키지를 재심사했다.
+  - `packages/shared`(42): 잔여 미커버는 `src/types/*` 타입 선언뿐 — 테스트 대상 없음. **0개 추가.**
+  - `packages/cli`(149): 잔여 구멍 `api-client.ts`/`auth-flow.ts`는 네트워크 통합 지점이라 프로젝트 테스트 전략(`통합 지점은 목으로 대체하지 않음`)상 단위 목 테스트가 부적합. **0개 추가.**
+  - `packages/web`(198→215): 직전 스캔이 §3에 콕 집어둔 `dashboard.ts` 순수 헬퍼만 보강. `parsePagination`은 Prisma `skip`/`take`를 직접 결정해 clamp 붕괴가 무한정 쿼리/음수 skip으로 무증상 유출되는 **깨질 가치 있는** 로직이라 12개, `parseDateRange`의 시간 비의존 분기(종일 보정·swap·fallback) 5개를 추가. **+17.**
+- **소스 변경 0**: `dashboard.ts`가 `./db`만 import하고 PrismaClient 생성이 지연이라 추출 없이 직접 import로 고정 가능했다(직전 스파이크의 `week-range.ts` 분리 같은 소스 수술 불필요). 신규 devDependency도 없어 `pnpm-lock.yaml` 변동 없음.
+- **리포트 정정 1건**: R4의 events route silent-catch 라인 참조가 코드 성장으로 197-199→224-226으로 드리프트해 있어 정정(동작 동일). 그 외 R1~R5·부채 항목은 앱 코드 무변경이라 재검증 후 유지.
+- 기존 테스트 파일은 한 글자도 수정하지 않았다.
+
+### 2026-06-12 스파이크
 
 - **기능 코드 변경은 1건뿐**: `packages/web/src/lib/server/weekly-report.ts`의 순수 주차 함수를 `week-range.ts`로 이동(잘라내기+re-export, 로직 무수정). `server-only` import 때문에 분리 없이는 테스트가 불가능했고, 동작 동일성은 21개 테스트(golden path·경계·roundtrip)로 증명했다. 호출자 2곳(`weekly-report.ts` 내부, `reports/route.ts`)은 기존 import 경로 그대로 동작한다.
 - `packages/shared`의 build 스크립트를 `tsc` → `tsc -p tsconfig.build.json`로 변경한 것은 테스트 파일이 `dist/`에 컴파일되어 패키지 산출물에 섞이는 것을 막기 위함이다. `packages/cli`가 이미 쓰는 패턴(`packages/cli/tsconfig.build.json`)을 그대로 따랐고, 테스트 제외 외 빌드 옵션 변화는 없다.
