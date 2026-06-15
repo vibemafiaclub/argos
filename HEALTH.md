@@ -1,7 +1,13 @@
 # Argos 저장소 건강 리포트
 
-> 작성: 2026-06-12, 격리 worktree(`agent/spike-3-202606111837`) 기준.
+> 최초 작성: 2026-06-12 (`agent/spike-3-202606111837`).
+> 최종 갱신: 2026-06-16 일일 건강 스캔(백로그 #7, `agent/2026-06-15-001`).
 > 모든 경로는 저장소 루트 상대 경로다.
+>
+> **2026-06-16 스캔 요약**: 최신 커밋이 본 리포트를 만든 커밋(`7241f61`)이며 그 이후
+> 제품 코드 변경이 없다 — 리스크 R1~R5와 부채 표는 검증 결과 여전히 유효하다(코드 드리프트 0).
+> 이번 스캔은 직전 스캔이 "남은 구멍"으로 남긴 순수 함수 2곳(`generateSlug`, `parsePagination`)에
+> "깨지면 의미 있는 것을 알게 되는" 테스트 +24개를 보강했다(§3, 부록 결정 018 기록).
 
 ## 1. 개요
 
@@ -18,13 +24,15 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 
 ## 3. 테스트 현황
 
-실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일).
+실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일). 아래는 2026-06-16 스캔 시점 실측치다.
 
-| 패키지 | 이번 작업 전 | 이번 작업 후 | 비고 |
+| 패키지 | 06-12 스파이크 후 | 06-16 현재 | 비고 |
 |---|---|---|---|
-| `packages/shared` | **0개 (인프라 없음)** | **42개** (4 파일) | vitest 신규 셋업 |
-| `packages/cli` | 142개 (11 파일) | **149개** (12 파일) | +7 (`src/lib/config.test.ts`) |
-| `packages/web` | 154개 (13 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | **198개** (15 파일) | +44 (`week-range.test.ts` 21, `format.test.ts` 23) |
+| `packages/shared` | **42개** (4 파일) | **42개** (4 파일) | 변동 없음 |
+| `packages/cli` | **149개** (12 파일) | **149개** (12 파일) | 변동 없음 |
+| `packages/web` | **198개** (15 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | **222개** (17 파일, skip 13 동일) | **+24** (`slug.test.ts` 12, `pagination.test.ts` 12) |
+
+전체 실측: `pnpm -r test` → shared 42 / cli 149 / web 209 passed + 13 skipped = **400 passed, 13 skipped** (06-16).
 
 ### packages/shared — 신규 셋업
 - 추가: `vitest.config.ts`, `package.json`에 `test` 스크립트 + vitest devDep, `tsconfig.build.json`(테스트 파일을 dist 빌드에서 제외 — cli의 기존 패턴 동일 적용, build 스크립트가 `tsc` → `tsc -p tsconfig.build.json`로 변경됨. dist 산출물은 동일).
@@ -40,8 +48,10 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 - 기존: cost 계산, RBAC, rollup 집계(`daily-rollup.test.ts`), 이벤트 derive, API 응답 계약 등 154개. DB 의존 13개(`skill-aggregation.test.ts` 등)는 `DATABASE_URL` 미설정 시 skip — 로컬 기본 실행/CI postgres에서만 풀 실행.
 - 이번 추가 ①: `src/lib/server/week-range.ts` **신규 분리** — `weekly-report.ts`는 `import 'server-only'`라 vitest에서 import 불가(기존 `weekly-report.test.ts` 주석에 명시된 제약). 순수 주차 계산(`getWeekRangeForDate`/`parseWeekParam`/`formatWeekLabel`)만 분리하고 `weekly-report.ts`가 re-export하여 호출자(`api/orgs/[orgSlug]/reports/route.ts`) 무변경. 동작 동일성은 golden/경계/roundtrip 21개 테스트로 고정.
 - 이번 추가 ②: `src/lib/format.test.ts` — 사용자에게 직접 보이는 토큰/비용/시간 포맷터 23개 (TZ 비의존 분기만; 로컬 시간 렌더링은 브라우저 TZ 의존이 의도된 동작).
-- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`, `slug.ts`, `dashboard.ts`의 `parsePagination`, `api-client.ts`, `session-files.ts`.
-- **기존 테스트 수정: 없음** (전부 원형 유지).
+- **06-16 추가 ①**: `src/lib/server/slug.test.ts` — `generateSlug` 12개. org/project URL slug 정규화(소문자→공백/하이픈→비허용문자 제거→하이픈 압축→트림)와 "영숫자 없으면 빈 문자열" 가드를 고정. 정규화 순서나 가드가 깨지면 URL이 깨지거나 충돌하는 무방비 순수 함수였다(언더스코어 제거·비ASCII 제거 quirk 포함).
+- **06-16 추가 ②**: `src/lib/server/pagination.test.ts` — `parsePagination`(`dashboard.ts` export) 12개. clamp 범위 `[10,100]`·page 하한 1·`skip=(page-1)*pageSize` 공식·비숫자/0 폴백을 고정. 깨지면 잘못된 데이터 페이지가 조용히 서빙된다.
+- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계 — `server-only`+DB 의존, 분리 필요 §5-7), `jwt.ts`(jose 래퍼+`Date.now`+env — 단위 목 가치 낮음), `api-client.ts`, `session-files.ts`.
+- **기존 테스트 수정: 없음** (06-12·06-16 모두 전부 원형 유지).
 
 ## 4. 리스크 상위 5
 
@@ -84,3 +94,9 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 - 버그로 보이는 동작 3건(W53 overflow, TZ 의존, `"+-1m"`)은 **고치지 않고** 현재 동작 기준으로 테스트에 `TODO(bug)` 주석과 함께 고정했다 (임무 규칙 준수).
 - 기존 테스트 파일은 한 글자도 수정하지 않았다.
 - `pnpm-lock.yaml` diff가 커 보이는 것(±약 985줄)은 vitest 추가 외에 pnpm이 lockfile을 재작성하며 모든 resolution 항목의 중복 `tarball:` URL 필드를 제거했기 때문이다(integrity 해시는 전부 유지 — `--frozen-lockfile` 설치에 영향 없음). 의미 있는 변경은 `packages/shared` importer의 vitest 항목뿐이다.
+
+### 2026-06-16 일일 스캔 판단 기록 (결정 018)
+
+- **테스트 보강 여부**: 0개가 아니라 **+24개**. 직전 스캔이 "남은 구멍"으로 명시한 순수 함수 2곳(`generateSlug`, `parsePagination`)이 둘 다 (a) `server-only` 미의존이라 추출 없이 vitest로 import 가능하고, (b) URL/페이지네이션이라는 실제 폭발 반경을 가지며, (c) 무방비였다 — "깨지면 의미 있는 것을 알게 되는" 기준을 통과해 추가했다. 신규 의존성·기능 코드 변경 0건(테스트 파일 2개만 추가).
+- **추가하지 않은 곳과 이유**: `jwt.ts`(jose 래퍼 roundtrip = 라이브러리 동작 테스트 + `Date.now`/env 의존, 가치 낮음 — 1년 만료는 R2로 이미 추적 중), `password-reset.ts`/`auth-actions.ts`/`admin-auth.ts`(전부 `server-only`+DB/env 의존 — 순수 함수 분리가 선행돼야 하며 이는 §5-7 M-사이즈 부채로 별도 추적, 일일 스캔에서 분리 리스크를 질 가치 없음), `api-client.ts`/`auth-flow.ts`(네트워크 통합 지점 — 테스트 전략상 목 부적합). 커버리지 숫자 채우기는 하지 않았다.
+- **코드 드리프트 검증**: `git log` 기준 본 리포트 커밋(`7241f61`) 이후 제품 코드 커밋 0건. R1~R5와 부채 표의 인용 경로/라인을 재확인했고 모두 현행 유효하다.
