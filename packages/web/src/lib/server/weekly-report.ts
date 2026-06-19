@@ -1,13 +1,8 @@
 import 'server-only'
 
-import {
-  startOfISOWeek,
-  format,
-  getISOWeek,
-  getISOWeekYear,
-  subWeeks,
-} from 'date-fns'
+import { subWeeks } from 'date-fns'
 import { db } from './db'
+import { getWeekRangeForDate, formatWeekLabel, type WeekRange } from './week-range'
 import {
   getDailyRollupsForProjects,
   aggregateSummary,
@@ -26,60 +21,11 @@ import type {
 } from '@/types/reports'
 
 // ─── Week utilities ────────────────────────────────────────────────────────
+// 순수 week 계산 로직은 week-range.ts 로 분리 (vitest 테스트 가능).
+// 기존 호출자 호환을 위해 동일 경로에서 re-export 한다.
 
-export interface WeekRange {
-  start: Date  // Monday 00:00 UTC
-  end: Date    // Sunday 23:59:59.999 UTC
-  isoKey: string
-}
-
-function toUtcMidnight(date: Date): Date {
-  return new Date(Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth(),
-    date.getUTCDate(),
-    0, 0, 0, 0,
-  ))
-}
-
-function formatIsoKey(date: Date): string {
-  const year = getISOWeekYear(date)
-  const week = getISOWeek(date)
-  return `${year}-W${String(week).padStart(2, '0')}`
-}
-
-function formatWeekLabel(start: Date, end: Date): string {
-  const isoKey = formatIsoKey(start)
-  const startLabel = format(start, 'M/d')
-  const endLabel = format(end, 'M/d')
-  return `${isoKey} (${startLabel}~${endLabel})`
-}
-
-/** 날짜가 속한 ISO week의 월요일 00:00 UTC와 일요일 23:59:59.999 UTC */
-export function getWeekRangeForDate(date: Date): WeekRange {
-  // startOfISOWeek는 local time 기준이므로 UTC midnight으로 정규화
-  const monday = toUtcMidnight(startOfISOWeek(date))
-  const end = new Date(monday.getTime() + 7 * 24 * 60 * 60 * 1000 - 1)
-  return {
-    start: monday,
-    end,
-    isoKey: formatIsoKey(monday),
-  }
-}
-
-/** "2026-W16" → WeekRange. 유효하지 않으면 null */
-export function parseWeekParam(iso: string): WeekRange | null {
-  const m = iso.match(/^(\d{4})-W(\d{1,2})$/)
-  if (!m) return null
-  const year = parseInt(m[1], 10)
-  const week = parseInt(m[2], 10)
-  if (week < 1 || week > 53) return null
-
-  // ISO 8601: week 1 = year-01-04를 포함하는 주
-  const jan4 = new Date(Date.UTC(year, 0, 4))
-  const weekRepresentative = new Date(jan4.getTime() + (week - 1) * 7 * 24 * 60 * 60 * 1000)
-  return getWeekRangeForDate(weekRepresentative)
-}
+export { getWeekRangeForDate, parseWeekParam } from './week-range'
+export type { WeekRange } from './week-range'
 
 /** 직전 완료 주 (기본값). 현재 주는 진행 중이므로 제외 */
 export function getDefaultWeekRange(): WeekRange {
