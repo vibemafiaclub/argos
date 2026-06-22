@@ -122,6 +122,7 @@ export async function exchangeOnboardToken(
 /**
  * 회원가입 비즈니스 로직.
  * 이메일 중복 시 'EMAIL_IN_USE' 반환, 그 외에는 AuthResult.
+ * user 생성과 cliToken 생성을 트랜잭션으로 묶어 orphan user를 방지한다.
  */
 export async function registerUser(input: {
   email: string
@@ -136,15 +137,22 @@ export async function registerUser(input: {
   const passwordHash = await bcrypt.hash(password, 10)
 
   try {
-    const user = await db.user.create({
-      data: { email, passwordHash, name },
-    })
+    return await db.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: { email, passwordHash, name },
+      })
 
-    return issueAuthResultForUser({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      createdAt: user.createdAt,
+      const token = await signJwt(user.id)
+      const tokenHash = createHash('sha256').update(token).digest('hex')
+
+      await tx.cliToken.create({
+        data: { userId: user.id, tokenHash, source: 'WEB' },
+      })
+
+      return {
+        token,
+        user: { id: user.id, email: user.email, name: user.name, createdAt: user.createdAt },
+      }
     })
   } catch (err) {
     // Race condition: concurrent registrations with same email — P2002 unique constraint
