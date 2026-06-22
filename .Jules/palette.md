@@ -1,0 +1,3 @@
+## 2024-06-22 - Semantic linkage in collapsible UI sections
+**Learning:** Collapsible sections need semantic linkage between the toggle button and the content container to help screen readers navigate effectively. `aria-expanded` is not enough; `aria-controls` must point to the ID of the content. Visual icons indicating state (like chevrons) should be hidden from screen readers to reduce noise.
+**Action:** Use `useId()` to generate a unique ID for the content container, apply it to `id` on the container and `aria-controls` on the toggle button. Add `aria-hidden="true"` to state indicator icons.
