@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto'
 import { SignJWT, jwtVerify } from 'jose'
 import { env } from './env'
 
@@ -10,6 +11,7 @@ export async function signJwt(userId: string): Promise<string> {
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime(Math.floor(Date.now() / 1000) + JWT_EXPIRATION)
+    .setJti(randomBytes(16).toString('hex'))
     .sign(secretKey)
 
   return jwt
