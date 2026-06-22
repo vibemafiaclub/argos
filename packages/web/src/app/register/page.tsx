@@ -48,7 +48,6 @@ export default function RegisterPage() {
         setError('Registration succeeded but login failed. Please try logging in.')
       } else {
         router.push('/dashboard')
-        router.refresh()
       }
     } catch {
       setError('An error occurred. Please try again.')
