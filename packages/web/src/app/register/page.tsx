@@ -31,8 +31,7 @@ export default function RegisterPage() {
 
       if (!res.ok) {
         const data = await res.json()
-        const msg = typeof data.error === 'string' ? data.error : (data.error?.message || 'Registration failed')
-        setError(msg)
+        setError(data.error?.message ?? 'Registration failed')
         setLoading(false)
         return
       }
