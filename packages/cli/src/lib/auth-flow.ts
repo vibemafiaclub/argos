@@ -1,15 +1,32 @@
-import { exec } from 'child_process'
+import { spawn } from 'child_process'
 import chalk from 'chalk'
 import ora from 'ora'
 import type { User, LoginResponse } from '@argos/shared'
 import { apiRequest } from './api-client.js'
 
 function openBrowser(url: string): void {
-  const cmd =
-    process.platform === 'darwin' ? 'open' :
-    process.platform === 'win32' ? 'start ""' :
-    'xdg-open'
-  exec(`${cmd} "${url}"`)
+  let safeUrl: string
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Invalid URL protocol')
+    }
+    safeUrl = parsed.href
+  } catch {
+    console.error('Invalid URL:', url)
+    return
+  }
+
+  if (process.platform === 'darwin') {
+    spawn('open', [safeUrl], { stdio: 'ignore' }).unref()
+  } else if (process.platform === 'win32') {
+    spawn('cmd.exe', ['/c', 'start', '""', safeUrl.replace(/&/g, '^&')], {
+      windowsVerbatimArguments: true,
+      stdio: 'ignore'
+    }).unref()
+  } else {
+    spawn('xdg-open', [safeUrl], { stdio: 'ignore' }).unref()
+  }
 }
 
 /**
