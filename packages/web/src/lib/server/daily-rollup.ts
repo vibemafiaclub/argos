@@ -397,18 +397,29 @@ export async function getDailyRollupsForProjects(
     projectIds.map((pid) => getDailyRollups(pid, from, to)),
   )
 
+  type RollupAccumulator = Omit<DailyRollup, 'activeUserIds' | 'userStats'> & {
+    activeUserIds: Set<string>
+    userStats: Map<string, DailyRollup['userStats'][number]>
+  }
+
   // date-key 기준으로 병합
-  const byDate = new Map<string, DailyRollup>()
+  // ⚡ Bolt: O(P) 로깅 최적화
+  // 프로젝트 수(P)가 많을 때 루프 내부에서 매번 Array.from()을 호출하지 않고
+  // Set과 Map을 유지하여 메모리 할당과 GC 압박을 대폭 줄입니다.
+  const byDate = new Map<string, RollupAccumulator>()
   for (const rollups of perProject) {
     for (const r of rollups) {
       const prev = byDate.get(r.date)
       if (!prev) {
+        const userMap = new Map()
+        for (const u of r.userStats) userMap.set(u.userId, { ...u })
+
         byDate.set(r.date, {
           date: r.date,
           sessionCount: r.sessionCount,
           turnCount: r.turnCount,
-          activeUserCount: 0, // 나중에 union 크기로 재계산
-          activeUserIds: [...r.activeUserIds],
+          activeUserCount: 0,
+          activeUserIds: new Set(r.activeUserIds),
           inputTokens: r.inputTokens,
           outputTokens: r.outputTokens,
           cacheReadTokens: r.cacheReadTokens,
@@ -417,7 +428,7 @@ export async function getDailyRollupsForProjects(
           skillCounts: { ...r.skillCounts },
           agentCounts: { ...r.agentCounts },
           modelTokens: { ...r.modelTokens },
-          userStats: r.userStats.map((u) => ({ ...u })),
+          userStats: userMap,
         })
       } else {
         prev.sessionCount += r.sessionCount
@@ -428,24 +439,21 @@ export async function getDailyRollupsForProjects(
         prev.cacheCreationTokens += r.cacheCreationTokens
         prev.estimatedCostUsd += r.estimatedCostUsd
         // activeUserIds: 합집합
-        const userSet = new Set(prev.activeUserIds)
-        for (const u of r.activeUserIds) userSet.add(u)
-        prev.activeUserIds = Array.from(userSet)
-        for (const [k, v] of Object.entries(r.skillCounts)) {
-          prev.skillCounts[k] = (prev.skillCounts[k] ?? 0) + v
+        for (const u of r.activeUserIds) prev.activeUserIds.add(u)
+        for (const k in r.skillCounts) {
+          prev.skillCounts[k] = (prev.skillCounts[k] ?? 0) + r.skillCounts[k]
         }
-        for (const [k, v] of Object.entries(r.agentCounts)) {
-          prev.agentCounts[k] = (prev.agentCounts[k] ?? 0) + v
+        for (const k in r.agentCounts) {
+          prev.agentCounts[k] = (prev.agentCounts[k] ?? 0) + r.agentCounts[k]
         }
-        for (const [k, v] of Object.entries(r.modelTokens)) {
-          prev.modelTokens[k] = (prev.modelTokens[k] ?? 0) + v
+        for (const k in r.modelTokens) {
+          prev.modelTokens[k] = (prev.modelTokens[k] ?? 0) + r.modelTokens[k]
         }
         // userStats: userId 기준 sum
-        const userMap = new Map(prev.userStats.map((u) => [u.userId, u]))
         for (const u of r.userStats) {
-          const prevU = userMap.get(u.userId)
+          const prevU = prev.userStats.get(u.userId)
           if (!prevU) {
-            userMap.set(u.userId, { ...u })
+            prev.userStats.set(u.userId, { ...u })
           } else {
             prevU.sessionCount += u.sessionCount
             prevU.inputTokens += u.inputTokens
@@ -455,17 +463,18 @@ export async function getDailyRollupsForProjects(
             prevU.agentCalls += u.agentCalls
           }
         }
-        prev.userStats = Array.from(userMap.values())
       }
     }
   }
 
-  // activeUserCount 재계산
-  for (const r of byDate.values()) {
-    r.activeUserCount = r.activeUserIds.length
-  }
+  // ⚡ Bolt: 루프가 모두 끝난 후 마지막에 한 번만 배열로 변환
+  const result: DailyRollup[] = Array.from(byDate.values()).map(acc => ({
+    ...acc,
+    activeUserIds: Array.from(acc.activeUserIds),
+    activeUserCount: acc.activeUserIds.size,
+    userStats: Array.from(acc.userStats.values()),
+  }))
 
-  const result = Array.from(byDate.values())
   result.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
   return result
 }
@@ -611,9 +620,11 @@ export function aggregateSummary(
     totals.cacheCreationTokens += r.cacheCreationTokens
     totals.estimatedCostUsd += r.estimatedCostUsd
     for (const u of r.activeUserIds) activeUsers.add(u)
-    for (const [k, v] of Object.entries(r.skillCounts)) skillCounts[k] = (skillCounts[k] ?? 0) + v
-    for (const [k, v] of Object.entries(r.agentCounts)) agentCounts[k] = (agentCounts[k] ?? 0) + v
-    for (const [k, v] of Object.entries(r.modelTokens)) modelTokens[k] = (modelTokens[k] ?? 0) + v
+    // ⚡ Bolt: Object.entries() 배열 생성 대신 for...in 을 사용하여
+    // 가비지 컬렉션(GC) 비용 제거
+    for (const k in r.skillCounts) skillCounts[k] = (skillCounts[k] ?? 0) + r.skillCounts[k]
+    for (const k in r.agentCounts) agentCounts[k] = (agentCounts[k] ?? 0) + r.agentCounts[k]
+    for (const k in r.modelTokens) modelTokens[k] = (modelTokens[k] ?? 0) + r.modelTokens[k]
   }
 
   // Deterministic tie-break: callCount DESC, skillName ASC (codepoint binary —
