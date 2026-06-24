@@ -18,6 +18,7 @@ export function SessionFilesSummary({ files, onOpenFilesTab }: FilesSummaryProps
         <button
           type="button"
           onClick={onOpenFilesTab}
+          aria-label={`View ${modifiedCount} modified ${modifiedCount === 1 ? 'file' : 'files'}`}
           className="inline-flex items-center gap-1.5 rounded-full bg-success/15 px-2.5 py-1 text-success hover:bg-success/25 transition-colors"
         >
           <Pencil className="h-3 w-3" />
@@ -29,6 +30,7 @@ export function SessionFilesSummary({ files, onOpenFilesTab }: FilesSummaryProps
         <button
           type="button"
           onClick={onOpenFilesTab}
+          aria-label={`View ${readCount} read ${readCount === 1 ? 'file' : 'files'}`}
           className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-muted-foreground hover:bg-muted/70 transition-colors"
         >
           <Eye className="h-3 w-3" />
@@ -69,6 +71,7 @@ function FileRow({ entry, unit, onJump, tone }: FileRowProps) {
       type="button"
       onClick={() => onJump(entry.lastEventIdx)}
       title={`${entry.path} — jump to last ${unit}`}
+      aria-label={`Jump to last ${unit} in ${entry.path}`}
       className="group w-full text-left flex items-center gap-3 px-3 py-2 rounded-md hover:bg-muted/50 transition-colors"
     >
       <FileText className={`h-4 w-4 shrink-0 ${iconTone}`} />
