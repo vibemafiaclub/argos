@@ -1,15 +1,28 @@
-import { exec } from 'child_process'
+import { spawn } from 'child_process'
 import chalk from 'chalk'
 import ora from 'ora'
 import type { User, LoginResponse } from '@argos/shared'
 import { apiRequest } from './api-client.js'
 
 function openBrowser(url: string): void {
-  const cmd =
-    process.platform === 'darwin' ? 'open' :
-    process.platform === 'win32' ? 'start ""' :
-    'xdg-open'
-  exec(`${cmd} "${url}"`)
+  // Command Injection 방지를 위해 exec 대신 spawn 사용
+  if (process.platform === 'win32') {
+    // Windows: cmd.exe 빌트인 start 명령어 사용
+    const child = spawn('cmd.exe', ['/c', 'start', '""', url.replace(/&/g, '^&')], {
+      windowsVerbatimArguments: true,
+      detached: true,
+      stdio: 'ignore'
+    })
+    child.unref()
+  } else if (process.platform === 'darwin') {
+    // macOS
+    const child = spawn('open', [url], { detached: true, stdio: 'ignore' })
+    child.unref()
+  } else {
+    // Linux 등
+    const child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' })
+    child.unref()
+  }
 }
 
 /**
