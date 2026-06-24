@@ -1,7 +1,13 @@
 # Argos 저장소 건강 리포트
 
-> 작성: 2026-06-12, 격리 worktree(`agent/spike-3-202606111837`) 기준.
-> 모든 경로는 저장소 루트 상대 경로다.
+> 최초 작성: 2026-06-12, 격리 worktree(`agent/spike-3-202606111837`) 기준.
+> 최종 갱신: 2026-06-25, 일일 건강 스캔 #16(`agent/2026-06-24-001`). 모든 경로는 저장소 루트 상대 경로다.
+
+> **2026-06-25 스캔 델타 (2026-06-12 이후 7개 커밋 반영):**
+> - **R4 부분 완화**: `0aece9f`가 `error-helper.ts`에 `jsonError()` 헬퍼와 `handleRouteError`의 구조화 로깅(`prismaCode` 포함)을 추가했다. 단, 새 `{ error: { code, message } }` shape은 register 라우트 409 **1곳**에만 적용됐고 나머지 ~10곳은 여전히 옛 `{ error: '문자열' }`을 낸다(아래 R4 갱신). Q2(문자열 비교 분기)·Q3(silent catch)는 그대로다 → **심각도 유지(중간)**.
+> - **신규 안정성 수정 3건**(리스크 영향 없음, 정보용): `e809975` `registerUser`를 `$transaction`으로 감싸 orphan user 방지, `9d2221e` `signJwt`에 `setJti(randomBytes)` 추가로 동일 초 재발급 시 `token_hash` 충돌(500) 해소, `a76ecdb` 회원가입 후 `router.refresh()` 경합 수정.
+> - **품질 게이트 강화**(부채 감소): `32e35c0`가 CI에 `prisma migrate diff --exit-code` 드리프트 감지 step을 추가 — schema.prisma 수정 후 migration 누락 시 CI 실패(§5 갱신).
+> - **테스트**: web에 `error-helper.test.ts` 1파일/4테스트 추가 (실 `handleRouteError` 가드 — 근거는 §3·부록). 그 외 추가 가치 있는 무방비 지점 없음 → 결정 018에 따라 1파일로 종료.
 
 ## 1. 개요
 
@@ -20,11 +26,13 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 
 실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일).
 
-| 패키지 | 이번 작업 전 | 이번 작업 후 | 비고 |
-|---|---|---|---|
-| `packages/shared` | **0개 (인프라 없음)** | **42개** (4 파일) | vitest 신규 셋업 |
-| `packages/cli` | 142개 (11 파일) | **149개** (12 파일) | +7 (`src/lib/config.test.ts`) |
-| `packages/web` | 154개 (13 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | **198개** (15 파일) | +44 (`week-range.test.ts` 21, `format.test.ts` 23) |
+| 패키지 | 현재 테스트 수 | 비고 |
+|---|---|---|
+| `packages/shared` | **42개** (4 파일) | 2026-06-12 vitest 신규 셋업, 이후 변화 없음 |
+| `packages/cli` | **149개** (12 파일) | 변화 없음 |
+| `packages/web` | **202개** (16 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | 2026-06-25 +4 (`error-helper.test.ts`) |
+
+> 수치 출처: `pnpm -r test` (vitest 3.2.6). web 13개 skip은 `DATABASE_URL` 미설정 시 DB 의존 테스트(`skill-aggregation` 7 + `dashboard/skills/route` 5 + `daily-rollup` 1)가 건너뛰어지는 정상 동작이며 CI postgres에서 풀 실행된다.
 
 ### packages/shared — 신규 셋업
 - 추가: `vitest.config.ts`, `package.json`에 `test` 스크립트 + vitest devDep, `tsconfig.build.json`(테스트 파일을 dist 빌드에서 제외 — cli의 기존 패턴 동일 적용, build 스크립트가 `tsc` → `tsc -p tsconfig.build.json`로 변경됨. dist 산출물은 동일).
@@ -40,8 +48,9 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 - 기존: cost 계산, RBAC, rollup 집계(`daily-rollup.test.ts`), 이벤트 derive, API 응답 계약 등 154개. DB 의존 13개(`skill-aggregation.test.ts` 등)는 `DATABASE_URL` 미설정 시 skip — 로컬 기본 실행/CI postgres에서만 풀 실행.
 - 이번 추가 ①: `src/lib/server/week-range.ts` **신규 분리** — `weekly-report.ts`는 `import 'server-only'`라 vitest에서 import 불가(기존 `weekly-report.test.ts` 주석에 명시된 제약). 순수 주차 계산(`getWeekRangeForDate`/`parseWeekParam`/`formatWeekLabel`)만 분리하고 `weekly-report.ts`가 re-export하여 호출자(`api/orgs/[orgSlug]/reports/route.ts`) 무변경. 동작 동일성은 golden/경계/roundtrip 21개 테스트로 고정.
 - 이번 추가 ②: `src/lib/format.test.ts` — 사용자에게 직접 보이는 토큰/비용/시간 포맷터 23개 (TZ 비의존 분기만; 로컬 시간 렌더링은 브라우저 TZ 의존이 의도된 동작).
-- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`, `slug.ts`, `dashboard.ts`의 `parsePagination`, `api-client.ts`, `session-files.ts`.
-- **기존 테스트 수정: 없음** (전부 원형 유지).
+- **2026-06-25 추가: `src/lib/server/error-helper.test.ts` (4개)** — 실 `handleRouteError`/`jsonError`를 직접 실행. 이 함수는 CLAUDE.md가 규정한 `{ error: { code, message } }`의 **단일 500/400 진입점**인데, 두 라우트 테스트(`events/route.test.ts`, `dashboard/skills/route.test.ts`)가 모두 `vi.mock`/inline stub으로 **대체**해 실 구현이 어디서도 실행되지 않았다. 특히 "name 기반 ZodError duck-typing" 분기(`error-helper.ts:24-27`)는 @argos/shared와 web이 서로 다른 zod 인스턴스를 참조할 때 검증 실패가 조용히 500으로 떨어지는 것을 막으려 존재 — 회귀하면 400이어야 할 응답이 500 노이즈가 되고 클라이언트가 `details`를 잃는다. 가드: ① generic→500 + 내부 메시지 비누출, ② 실 `ZodError(instanceof)`→400+details, ③ instanceof 깨진 가짜 ZodError(name 기반)→여전히 400, ④ `jsonError` shape/status. `server-only`는 `events/route.test.ts`와 동일하게 `vi.mock`으로 stub.
+- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`(`env.ts`가 모듈 로드 시 5개 env를 hard-require → 단위 테스트엔 무거움), `slug.ts`, `dashboard.ts`의 `parsePagination`, `api-client.ts`, `session-files.ts`.
+- **기존 테스트 수정: 없음** (전부 원형 유지). 신규 파일만 추가.
 
 ## 4. 리스크 상위 5
 
@@ -54,8 +63,8 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 ### R3. 비용 산술의 float 누적 — **중간**
 `packages/web/src/lib/server/cost.ts:24-29`(`(tokens / 1_000_000) * pricePerM` float 곱), `daily-rollup.ts:293,308`(`Number(u.cost_usd ?? 0)` 후 일별 합산), `getDailyRollupsForProjects`의 `prev.estimatedCostUsd += r.estimatedCostUsd` 반복 가산. 시나리오: 수개월 × 다수 프로젝트 합산 시 표시 비용과 원본 레코드 합 사이에 센트 단위 불일치 → 비용 대시보드 신뢰 하락. 단가 자체는 이번에 `packages/shared/src/constants/pricing.test.ts`로 고정했지만, 누적 오차는 decimal 처리 없인 남는다.
 
-### R4. 에러를 문자열·silent catch로 다루는 ingestion/접근제어 경로 — **중간**
-이미 `docs/findings/2026-06-10T0340-code-quality-issues.md`에 Q1~Q3로 문서화되어 있고 **여전히 미해결**이다: ① API 에러 응답 형태가 3가지로 갈라져 클라이언트 파서가 메시지를 잃음(Q1), ② `packages/web/src/lib/server/dashboard-route-helper.ts:29-33`이 `err.message === 'Project not found'` 문자열 비교로 분기하고 그 외 모든 예외(DB 타임아웃 포함)를 403으로 뭉갬(Q2), ③ `packages/web/src/app/api/events/route.ts:197-199` ingestion silent catch — 토큰/메시지 유실이 무관측(Q3). 시나리오: DB 장애가 "권한 없음"으로 위장되어 디버깅 비용 폭증 + 데이터 유실을 아무도 모름.
+### R4. 에러를 문자열·silent catch로 다루는 ingestion/접근제어 경로 — **중간** *(2026-06-25: 부분 완화, 미해결)*
+`docs/findings/2026-06-10T0340-code-quality-issues.md`의 Q1~Q3로 문서화돼 있다. **진척**: `0aece9f`가 `error-helper.ts`에 `jsonError(code,message,status)` 헬퍼와 표준 shape `{ error: { code, message } }`를 도입하고(CLAUDE.md "API 에러 응답 규격"으로 성문화), `handleRouteError`에 `prismaCode` 구조화 로깅을 추가했다. **그러나 채택이 1곳뿐**이다: 새 shape은 register 라우트 409에만 적용됐고, 옛 `{ error: '문자열' }`을 그대로 내는 곳이 **10곳** 남았다 — `dashboard-route-helper.ts:31,33`, `app/api/events/route.ts:53,57`, `app/api/projects/[projectId]/route.ts:31,34`, `app/api/orgs/[orgSlug]/{members,reports}/route.ts`, `.../projects/[projectId]/members/...` 3개. **Q2 그대로**: `dashboard-route-helper.ts:29-33`이 `message === 'Project not found'` 문자열 비교로 분기하고 그 외 모든 예외(DB 타임아웃 포함)를 403으로 뭉갠다. **Q3 그대로**: `app/api/events/route.ts:224`의 self-heal 블록이 `} catch { /* 무시 (fire-and-forget) */ }`로 silent catch — 토큰/메시지 유실 무관측. 시나리오: DB 장애가 "권한 없음"으로 위장되어 디버깅 비용 폭증 + 데이터 유실을 아무도 모름. (실 `handleRouteError`는 이제 `error-helper.test.ts`로 가드되어 500/400 진입점 자체는 회귀 안전 — §3 참조.)
 
 ### R5. Claude Code transcript 포맷 가정의 조용한 드리프트 — **중간**
 `packages/cli/src/lib/transcript.ts`는 transcript JSONL의 type 문자열(`'queue-operation'` 등)과 content 형태를 하드코딩으로 가정하고, 안 맞는 줄은 per-line try/catch로 **조용히 버린다**. `commands/hook.ts`의 agent 감지도 `transcript_path`에 `/.codex/` 포함 여부 휴리스틱이다. 시나리오: Claude Code/Codex가 transcript 스키마를 바꾸면 에러 없이 토큰·메시지 수집량만 줄어들고(훅은 항상 exit 0), 대시보드 수치가 무증상으로 부정확해진다. 기존 테스트(`transcript.test.ts` 24개 등)가 현재 포맷은 고정하지만 포맷 버전 감지/관측 수단이 없다.
@@ -71,7 +80,7 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 | 3 | `parseWeekParam` W53 overflow를 null 반환으로 수정 + `formatRelativeTime` 음수 diff 처리 (테스트의 `TODO(bug)` 2건 해소) | **S** | R1, R5 보충; 테스트가 이미 있어 수정 안전 |
 | 4 | CLI hook.ts 도달 불가 SubagentStop 분기 삭제 (`docs/findings/...code-quality-issues.md` Q4) | **S** | dead code |
 | 5 | `~/.argos/config.json` 생성 시 `mode: 0o600` 지정 (`packages/cli/src/lib/config.ts:62`) | **S** | R2 완화 1단계 |
-| 6 | API 에러 응답 형태 단일화(`jsonError` 헬퍼) + 문자열 분기 제거 (Q1/Q2) | **M** | R4 해소 |
+| 6 | API 에러 응답 형태 단일화 — *헬퍼는 도입됨(`0aece9f`), 채택은 1/11곳*. 남은 10곳을 `jsonError()`로 전환 + `dashboard-route-helper.ts` 문자열 분기 제거 (Q1/Q2) | **S→M** | R4 해소; shape/진입점은 이미 `error-helper.test.ts`로 고정 |
 | 7 | `admin-auth.ts` 쿠키 파싱·`auth-actions.ts`/`password-reset.ts` TTL 경계를 순수 함수로 분리 후 단위 테스트 (이번 작업의 week-range 분리와 동일 수법) | **M** | 보안 게이트 무방비 |
 | 8 | 비용 집계를 정수 마이크로달러 또는 decimal로 전환 | **M** | R3 해소; UsageRecord 스키마 변경 수반 |
 | 9 | ingestion 경로 관측성: silent catch에 구조화 로그/메트릭 추가 (Q3) + transcript 포맷 버전 감지 | **M** | R4·R5 완화 |
@@ -84,3 +93,10 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 - 버그로 보이는 동작 3건(W53 overflow, TZ 의존, `"+-1m"`)은 **고치지 않고** 현재 동작 기준으로 테스트에 `TODO(bug)` 주석과 함께 고정했다 (임무 규칙 준수).
 - 기존 테스트 파일은 한 글자도 수정하지 않았다.
 - `pnpm-lock.yaml` diff가 커 보이는 것(±약 985줄)은 vitest 추가 외에 pnpm이 lockfile을 재작성하며 모든 resolution 항목의 중복 `tarball:` URL 필드를 제거했기 때문이다(integrity 해시는 전부 유지 — `--frozen-lockfile` 설치에 영향 없음). 의미 있는 변경은 `packages/shared` importer의 vitest 항목뿐이다.
+
+### 2026-06-25 일일 스캔(#16)에서의 판단 기록
+
+- **결정 018 적용 — 테스트는 1파일만 추가**: 깨졌을 때 의미 있는 것을 알게 되는 무방비 지점은 실 `handleRouteError`(error-helper.ts) 하나였다. CLAUDE.md가 성문화한 `{ error: { code, message } }` 단일 진입점인데 두 라우트 테스트가 모두 그 함수를 mock으로 대체해 실 구현·duck-typing 분기가 0커버리지였다. 그 외 후보(`jwt.ts`는 `env.ts`가 5개 env를 hard-require해 단위 테스트엔 무거움, `auth-actions.ts`/`admin-auth.ts`는 분리 선행 필요, `api-client.ts`는 네트워크 통합 지점)는 이번 스캔의 "삭제 가치 ∧ 저비용" 바를 넘지 못해 **추가하지 않았다**. 커버리지 숫자 채우기를 피한 의도된 0이다.
+- **기능 코드 변경 0건**: 이번 스캔은 테스트 1파일 + 본 리포트 갱신만 했다. `error-helper.ts`는 이미 `vi.mock('server-only')`로 테스트 가능했으므로 week-range처럼 분리할 필요가 없었다. 앱 동작 변경·기존 테스트 수정 모두 없음.
+- **vitest 신규 devDependency 없음**: web 패키지는 이미 vitest를 갖고 있어 `pnpm-lock.yaml` 무변경. 자가 검증에서 `pnpm install`은 "Already up to date"였다.
+- **자가 검증 결과**: `pnpm -r test` → shared 42 / cli 149 / web 202(189 pass + 13 DB-skip) 전체 통과, `pnpm typecheck` 0 에러.
