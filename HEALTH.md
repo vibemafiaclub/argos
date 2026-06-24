@@ -1,6 +1,7 @@
 # Argos 저장소 건강 리포트
 
-> 작성: 2026-06-12, 격리 worktree(`agent/spike-3-202606111837`) 기준.
+> 최초 작성: 2026-06-12 (`agent/spike-3-202606111837`).
+> 최근 스캔: **2026-06-22 (일일 건강 스캔 #13, `agent/2026-06-21-001`)** — 제품 코드는 직전 스캔 commit(`7241f61`)과 동일, 즉 §4 리스크·§5 부채는 전부 미해결로 유효함을 재확인. 이번 스캔의 테스트 보강은 `packages/web` `dashboard.test.ts` 1건(+14, §3 참조).
 > 모든 경로는 저장소 루트 상대 경로다.
 
 ## 1. 개요
@@ -18,13 +19,13 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 
 ## 3. 테스트 현황
 
-실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일).
+실행: `pnpm -r test` (vitest 3.2.6, 전 패키지 통일). 아래 수치는 2026-06-22 스캔(#13) 시점 실측이며 `pnpm -r test` 전체 통과.
 
-| 패키지 | 이번 작업 전 | 이번 작업 후 | 비고 |
+| 패키지 | 현재 테스트 | 이번 스캔(#13) | 비고 |
 |---|---|---|---|
-| `packages/shared` | **0개 (인프라 없음)** | **42개** (4 파일) | vitest 신규 셋업 |
-| `packages/cli` | 142개 (11 파일) | **149개** (12 파일) | +7 (`src/lib/config.test.ts`) |
-| `packages/web` | 154개 (13 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | **198개** (15 파일) | +44 (`week-range.test.ts` 21, `format.test.ts` 23) |
+| `packages/shared` | **42개** (4 파일) | +0 | 순수 로직(zod 스키마·단가표)은 spike-3에서 이미 커버 — 추가 가치 지점 없음 (결정 018) |
+| `packages/cli` | **149개** (12 파일) | +0 | 남은 구멍(`api-client`/`auth-flow`)은 네트워크 통합 지점이라 단위 목 부적합 — 0 추가가 정답 (결정 018) |
+| `packages/web` | **212개** (16 파일, DB의존 13개는 로컬 Postgres 없으면 skip) | **+14** | `dashboard.test.ts` — `parsePagination`/`parseDateRange` (DB skip/take 경계·날짜 범위) |
 
 ### packages/shared — 신규 셋업
 - 추가: `vitest.config.ts`, `package.json`에 `test` 스크립트 + vitest devDep, `tsconfig.build.json`(테스트 파일을 dist 빌드에서 제외 — cli의 기존 패턴 동일 적용, build 스크립트가 `tsc` → `tsc -p tsconfig.build.json`로 변경됨. dist 산출물은 동일).
@@ -40,8 +41,9 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 - 기존: cost 계산, RBAC, rollup 집계(`daily-rollup.test.ts`), 이벤트 derive, API 응답 계약 등 154개. DB 의존 13개(`skill-aggregation.test.ts` 등)는 `DATABASE_URL` 미설정 시 skip — 로컬 기본 실행/CI postgres에서만 풀 실행.
 - 이번 추가 ①: `src/lib/server/week-range.ts` **신규 분리** — `weekly-report.ts`는 `import 'server-only'`라 vitest에서 import 불가(기존 `weekly-report.test.ts` 주석에 명시된 제약). 순수 주차 계산(`getWeekRangeForDate`/`parseWeekParam`/`formatWeekLabel`)만 분리하고 `weekly-report.ts`가 re-export하여 호출자(`api/orgs/[orgSlug]/reports/route.ts`) 무변경. 동작 동일성은 golden/경계/roundtrip 21개 테스트로 고정.
 - 이번 추가 ②: `src/lib/format.test.ts` — 사용자에게 직접 보이는 토큰/비용/시간 포맷터 23개 (TZ 비의존 분기만; 로컬 시간 렌더링은 브라우저 TZ 의존이 의도된 동작).
-- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`, `slug.ts`, `dashboard.ts`의 `parsePagination`, `api-client.ts`, `session-files.ts`.
-- **기존 테스트 수정: 없음** (전부 원형 유지).
+- **스캔 #13(2026-06-22) 추가**: `src/lib/server/dashboard.test.ts` (+14). `parsePagination` — `?page`/`?pageSize` → Prisma `skip`/`take` 변환. 적대적 입력 전수로 **skip 음수 불가**(page<1 → 1 보정)·**take∈[10,100] clamp**(무제한 페이지 방지) 불변식을 고정. `parseDateRange` — `from>to` 스왑(범위 역전 방지)·`to`의 끝날(23:59:59.999 UTC) 포함 보정·기본 30일 창. 둘 다 모든 대시보드 쿼리의 입력 경계라 무방비였고 회귀 시 무증상 데이터 사고로 이어진다. `dashboard.ts`가 `./db`를 import하지만 PrismaClient는 lazy connect라 DATABASE_URL 없이 import·실행 가능(`project-actions.test.ts`와 동일 패턴, 14개 모두 통과).
+- 남은 구멍: `lib/server/admin-auth.ts`(쿠키 서명 파싱 — `server-only`+env 의존, 분리 필요), `auth-actions.ts`/`password-reset.ts`(TTL 경계), `jwt.ts`, `slug.ts`(`server/slug.ts`), `api-client.ts`, `session-files.ts`. 이들은 전부 `server-only`/env/네트워크 의존이라 분리 리팩토링 없이는 단위 테스트 불가 — §5 #7(M)로 남겨둔다.
+- **기존 테스트 수정: 없음** (전부 원형 유지). `dashboard.test.ts` 추가 외 신규 변경 없음.
 
 ## 4. 리스크 상위 5
 
@@ -79,6 +81,11 @@ Argos는 **Claude Code / Codex 팀을 위한 사용 분석 대시보드**다 —
 
 ## 부록: 이번 작업에서의 판단 기록
 
+### 스캔 #13 (2026-06-22) — 일일 건강 스캔
+- **결정 018 판단**: shared·cli 에는 "깨지면 의미 있는 것을 알게 되는" 무방비 순수 로직이 남아있지 않아 **0개 추가**가 정답이고(남은 구멍은 전부 네트워크 통합 지점), web 의 `parsePagination`/`parseDateRange` 두 함수만 그 기준을 통과해 `dashboard.test.ts`(+14)를 추가했다.
+- 기능 코드 변경 0건, 기존 테스트 수정 0건. 제품 코드가 직전 스캔(`7241f61`)과 동일하므로 §4 리스크·§5 부채는 재확인만 했다(shared exports `types` 순서·CLI config.json 평문/모드 미지정 등 모두 미해결 유지).
+
+### 스캔 #1 (2026-06-12) — 최초 하네스 구축
 - **기능 코드 변경은 1건뿐**: `packages/web/src/lib/server/weekly-report.ts`의 순수 주차 함수를 `week-range.ts`로 이동(잘라내기+re-export, 로직 무수정). `server-only` import 때문에 분리 없이는 테스트가 불가능했고, 동작 동일성은 21개 테스트(golden path·경계·roundtrip)로 증명했다. 호출자 2곳(`weekly-report.ts` 내부, `reports/route.ts`)은 기존 import 경로 그대로 동작한다.
 - `packages/shared`의 build 스크립트를 `tsc` → `tsc -p tsconfig.build.json`로 변경한 것은 테스트 파일이 `dist/`에 컴파일되어 패키지 산출물에 섞이는 것을 막기 위함이다. `packages/cli`가 이미 쓰는 패턴(`packages/cli/tsconfig.build.json`)을 그대로 따랐고, 테스트 제외 외 빌드 옵션 변화는 없다.
 - 버그로 보이는 동작 3건(W53 overflow, TZ 의존, `"+-1m"`)은 **고치지 않고** 현재 동작 기준으로 테스트에 `TODO(bug)` 주석과 함께 고정했다 (임무 규칙 준수).
