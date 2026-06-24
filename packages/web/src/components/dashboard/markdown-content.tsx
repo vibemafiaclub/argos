@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, type ReactNode } from "react";
+import { Component, memo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -26,7 +26,9 @@ class MarkdownErrorBoundary extends Component<
   }
 }
 
-export function MarkdownContent({ children }: MarkdownContentProps) {
+// ⚡ Bolt: Using React.memo for MarkdownContent bypasses expensive ReactMarkdown
+// parses on re-renders when the source markdown string hasn't changed.
+export const MarkdownContent = memo(function MarkdownContent({ children }: MarkdownContentProps) {
   const fallback = (
     <p className="whitespace-pre-wrap text-sm text-foreground">{children}</p>
   );
@@ -120,4 +122,4 @@ export function MarkdownContent({ children }: MarkdownContentProps) {
       </div>
     </MarkdownErrorBoundary>
   );
-}
+});
