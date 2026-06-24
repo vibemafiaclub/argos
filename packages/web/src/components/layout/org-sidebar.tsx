@@ -66,8 +66,9 @@ export function OrgSidebar() {
         <Link
           key={item.href}
           href={href}
+          aria-current={isActive ? 'page' : undefined}
           className={cn(
-            'block px-3 py-2 rounded-md text-sm font-medium transition-colors',
+            'block px-3 py-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             isActive
               ? 'bg-primary text-primary-foreground'
               : 'text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -82,8 +83,9 @@ export function OrgSidebar() {
       <Link
         key={item.href}
         href={href}
+        aria-current={isActive ? 'page' : undefined}
         className={cn(
-          'px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors',
+          'px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           isActive
             ? 'bg-primary text-primary-foreground'
             : 'bg-secondary text-secondary-foreground hover:bg-muted'
@@ -123,7 +125,8 @@ export function OrgSidebar() {
         <div className="p-3 border-t">
           <button
             onClick={handleLogout}
-            className="w-full px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+            className="w-full px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Log out of your account"
           >
             Log Out
           </button>
@@ -149,7 +152,8 @@ export function OrgSidebar() {
           </div>
           <button
             onClick={handleLogout}
-            className="px-3 py-1 text-sm text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+            className="px-3 py-1 text-sm text-destructive hover:bg-destructive/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Log out of your account"
           >
             Logout
           </button>

@@ -18,7 +18,7 @@ export function SessionFilesSummary({ files, onOpenFilesTab }: FilesSummaryProps
         <button
           type="button"
           onClick={onOpenFilesTab}
-          className="inline-flex items-center gap-1.5 rounded-full bg-success/15 px-2.5 py-1 text-success hover:bg-success/25 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-full bg-success/15 px-2.5 py-1 text-success hover:bg-success/25 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card"
         >
           <Pencil className="h-3 w-3" />
           <span className="font-medium tabular-nums">{modifiedCount}</span>
@@ -29,7 +29,7 @@ export function SessionFilesSummary({ files, onOpenFilesTab }: FilesSummaryProps
         <button
           type="button"
           onClick={onOpenFilesTab}
-          className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-muted-foreground hover:bg-muted/70 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-muted-foreground hover:bg-muted/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card"
         >
           <Eye className="h-3 w-3" />
           <span className="font-medium tabular-nums">{readCount}</span>
@@ -69,7 +69,7 @@ function FileRow({ entry, unit, onJump, tone }: FileRowProps) {
       type="button"
       onClick={() => onJump(entry.lastEventIdx)}
       title={`${entry.path} — jump to last ${unit}`}
-      className="group w-full text-left flex items-center gap-3 px-3 py-2 rounded-md hover:bg-muted/50 transition-colors"
+      className="group w-full text-left flex items-center gap-3 px-3 py-2 rounded-md hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <FileText className={`h-4 w-4 shrink-0 ${iconTone}`} />
       <span className="min-w-0 flex-1 flex items-baseline gap-1 truncate">
