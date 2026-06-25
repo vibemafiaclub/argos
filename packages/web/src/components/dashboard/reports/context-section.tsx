@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useState, useId, type ReactNode } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -12,6 +12,7 @@ interface ContextSectionProps {
 
 export function ContextSection({ title, children, defaultOpen = false }: ContextSectionProps) {
   const [open, setOpen] = useState(defaultOpen)
+  const id = useId()
 
   return (
     <div className="rounded-xl bg-card ring-1 ring-foreground/10 overflow-hidden">
@@ -23,6 +24,7 @@ export function ContextSection({ title, children, defaultOpen = false }: Context
           'hover:bg-card-elevated transition-colors',
         )}
         aria-expanded={open}
+        aria-controls={id}
       >
         <h2 className="text-base font-medium">{title}</h2>
         {open ? (
@@ -32,7 +34,7 @@ export function ContextSection({ title, children, defaultOpen = false }: Context
         )}
       </button>
       {open && (
-        <div className="px-4 pb-4 pt-1">
+        <div id={id} className="px-4 pb-4 pt-1">
           {children}
         </div>
       )}
