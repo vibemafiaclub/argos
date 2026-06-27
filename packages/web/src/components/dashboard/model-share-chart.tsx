@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, TooltipProps } from 'recharts'
 import { formatTokens } from '@/lib/format'
 import type { ModelShare } from '@argos/shared'
@@ -32,7 +33,17 @@ function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
 }
 
 export function ModelShareChart({ data }: ModelShareChartProps) {
-  const total = data.reduce((s, d) => s + d.totalTokens, 0)
+  // Optimization: Memoize the total tokens and Recharts data array to prevent expensive unnecessary re-renders.
+  // Impact: Reduces re-renders and improves responsiveness of the dashboard by avoiding reducing and mapping over usage data repeatedly.
+  const total = useMemo(() => data.reduce((s, d) => s + d.totalTokens, 0), [data])
+
+  const chartData = useMemo(() => {
+    if (total === 0) return []
+    return data.map(d => ({
+      ...d,
+      pct: (d.totalTokens / total) * 100,
+    }))
+  }, [data, total])
 
   if (total === 0 || data.length === 0) {
     return (
@@ -41,11 +52,6 @@ export function ModelShareChart({ data }: ModelShareChartProps) {
       </div>
     )
   }
-
-  const chartData = data.map(d => ({
-    ...d,
-    pct: (d.totalTokens / total) * 100,
-  }))
 
   return (
     <ResponsiveContainer width="100%" height={260}>
