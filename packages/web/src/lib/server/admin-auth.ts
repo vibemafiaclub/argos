@@ -1,8 +1,9 @@
 import 'server-only'
 
-import { createHmac, randomBytes, timingSafeEqual } from 'crypto'
+import { createHmac, pbkdf2, pbkdf2Sync, randomBytes, timingSafeEqual } from 'crypto'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
+import { promisify } from 'util'
 
 import { env } from './env'
 
@@ -13,36 +14,50 @@ const ADMIN_SESSION_COOKIE = 'argos_admin_session'
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const ADMIN_IMPERSONATION_TTL_MS = 60 * 1000
 const ADMIN_IMPERSONATION_PREFIX = 'argos_imp'
-const MAX_SAFE_EQUAL_BYTES = 512
 
-function safeEqual(a: string, b: string): boolean {
+const pbkdf2Async = promisify(pbkdf2)
+
+let adminPasswordHash: Buffer | null = null
+let adminPasswordSalt: Buffer | null = null
+
+function getAdminPasswordHash(): { hash: Buffer; salt: Buffer } {
+  if (!adminPasswordHash || !adminPasswordSalt) {
+    // Generate a consistent static salt for the lifetime of this server process
+    adminPasswordSalt = randomBytes(16)
+    // Pre-compute the hash synchronously at initialization to use it in timing-safe comparisons later
+    adminPasswordHash = pbkdf2Sync(ADMIN_PASSWORD, adminPasswordSalt, 100000, 64, 'sha256')
+  }
+  return { hash: adminPasswordHash, salt: adminPasswordSalt }
+}
+
+function signatureEqual(a: string, b: string): boolean {
   const aBytes = Buffer.from(a)
   const bBytes = Buffer.from(b)
 
-  if (aBytes.length > MAX_SAFE_EQUAL_BYTES || bBytes.length > MAX_SAFE_EQUAL_BYTES) {
+  if (aBytes.length !== bBytes.length) {
     return false
   }
 
-  const aPadded = Buffer.alloc(MAX_SAFE_EQUAL_BYTES)
-  const bPadded = Buffer.alloc(MAX_SAFE_EQUAL_BYTES)
-  aBytes.copy(aPadded)
-  bBytes.copy(bPadded)
-
-  return timingSafeEqual(aPadded, bPadded) && aBytes.length === bBytes.length
+  return timingSafeEqual(aBytes, bBytes)
 }
 
 function sign(payload: string): string {
   return createHmac('sha256', env.ADMIN_COOKIE_SECRET).update(payload).digest('base64url')
 }
 
-export function verifyAdminCredentials(input: {
+export async function verifyAdminCredentials(input: {
   username: string
   password: string
-}): boolean {
-  return (
-    safeEqual(input.username, ADMIN_USERNAME) &&
-    safeEqual(input.password, ADMIN_PASSWORD)
-  )
+}): Promise<boolean> {
+  // Short-circuit on username comparison to prevent unnecessary CPU load
+  if (input.username !== ADMIN_USERNAME) {
+    return false
+  }
+
+  const { hash, salt } = getAdminPasswordHash()
+  const inputHash = await pbkdf2Async(input.password, salt, 100000, 64, 'sha256')
+
+  return timingSafeEqual(hash, inputHash)
 }
 
 export function createAdminSessionCookieValue(): string {
@@ -77,8 +92,8 @@ export function verifyAdminSessionCookie(value: string | undefined): boolean {
 
   const [username, expiresAtRaw, nonce, signature] = parts
   const payload = `${username}.${expiresAtRaw}.${nonce}`
-  if (!safeEqual(signature, sign(payload))) return false
-  if (!safeEqual(username, ADMIN_USERNAME)) return false
+  if (!signatureEqual(signature, sign(payload))) return false
+  if (username !== ADMIN_USERNAME) return false
 
   const expiresAt = Number(expiresAtRaw)
   return Number.isFinite(expiresAt) && Date.now() <= expiresAt
@@ -110,8 +125,8 @@ export function verifyAdminImpersonationToken(token: string): string | null {
 
   const [prefix, userId, expiresAtRaw, nonce, signature] = parts
   const payload = `${prefix}.${userId}.${expiresAtRaw}.${nonce}`
-  if (!safeEqual(prefix, ADMIN_IMPERSONATION_PREFIX)) return null
-  if (!safeEqual(signature, sign(payload))) return null
+  if (prefix !== ADMIN_IMPERSONATION_PREFIX) return null
+  if (!signatureEqual(signature, sign(payload))) return null
 
   const expiresAt = Number(expiresAtRaw)
   if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return null
