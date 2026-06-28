@@ -164,6 +164,7 @@ function RowView({
     <button
       type="button"
       onClick={onClick}
+      aria-expanded={chevron !== undefined ? chevron === "expanded" : undefined}
       className={cn(
         "w-full h-full text-left flex items-center gap-3 py-2 border-b border-border/60 transition-colors",
         indented ? "pl-10 pr-3" : "px-3",
