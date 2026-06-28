@@ -165,7 +165,7 @@ function RowView({
       type="button"
       onClick={onClick}
       className={cn(
-        "w-full h-full text-left flex items-center gap-3 py-2 border-b border-border/60 transition-colors",
+        "w-full h-full text-left flex items-center gap-3 py-2 border-b border-border/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:bg-muted/50",
         indented ? "pl-10 pr-3" : "px-3",
         isSelected
           ? "border-l-2 border-l-brand bg-brand-subtle"
