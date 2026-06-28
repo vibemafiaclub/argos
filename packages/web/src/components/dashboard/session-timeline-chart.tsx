@@ -24,6 +24,11 @@ interface ToolCallPoint {
   toolName: string
 }
 
+interface ParsedToolCallPoint {
+  timestampMs: number
+  toolName: string
+}
+
 interface ChartDataItem {
   relativeTime: string
   input: number
@@ -35,20 +40,18 @@ interface ChartDataItem {
 
 function getToolSummaryForIndex(
   index: number,
-  usageTimeline: SessionTimelineUsage[],
-  toolCalls: ToolCallPoint[]
+  parsedUsage: number[],
+  toolCalls: ParsedToolCallPoint[]
 ): string {
   if (toolCalls.length === 0) return ''
 
-  const currentTimestamp = new Date(usageTimeline[index]!.timestamp).getTime()
-  const prevTimestamp =
-    index > 0 ? new Date(usageTimeline[index - 1]!.timestamp).getTime() : 0
+  const currentTimestamp = parsedUsage[index]!
+  const prevTimestamp = index > 0 ? parsedUsage[index - 1]! : 0
 
   // 현재 usageTimeline timestamp 이전이면서, 이전 usageTimeline timestamp 이후의 tool events 찾기
   // 첫 번째 bar(index=0)는 prevTimestamp가 0이므로 해당 bar 이전의 모든 이벤트를 포함
   const relevantTools = toolCalls.filter((e) => {
-    const toolTimestamp = new Date(e.timestamp).getTime()
-    return toolTimestamp <= currentTimestamp && toolTimestamp > prevTimestamp
+    return e.timestampMs <= currentTimestamp && e.timestampMs > prevTimestamp
   })
 
   if (relevantTools.length === 0) return ''
@@ -132,9 +135,12 @@ export function SessionTimelineChart({
     )
   }
 
-  const toolCalls: ToolCallPoint[] = messages
+  // Pre-parse timestamps to avoid O(N*M) Date parsing inside loops
+  const toolCalls: ParsedToolCallPoint[] = messages
     .filter((m) => m.role === 'TOOL')
-    .map((m) => ({ timestamp: m.timestamp, toolName: m.toolName ?? 'unknown' }))
+    .map((m) => ({ timestampMs: new Date(m.timestamp).getTime(), toolName: m.toolName ?? 'unknown' }))
+
+  const parsedUsage = usageTimeline.map(u => new Date(u.timestamp).getTime())
 
   const chartData: ChartDataItem[] = usageTimeline.map((u, idx) => ({
     relativeTime: formatRelativeTime(u.timestamp, sessionStartedAt),
@@ -142,7 +148,7 @@ export function SessionTimelineChart({
     output: u.outputTokens,
     cost: u.estimatedCostUsd,
     model: u.model,
-    toolSummary: getToolSummaryForIndex(idx, usageTimeline, toolCalls),
+    toolSummary: getToolSummaryForIndex(idx, parsedUsage, toolCalls),
   }))
 
   return (
