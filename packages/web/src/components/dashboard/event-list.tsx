@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, memo } from "react";
 import { List, type RowComponentProps } from "react-window";
 import { User, Bot, Wrench, ChevronRight } from "lucide-react";
 import {
@@ -149,7 +149,10 @@ type RowViewProps = {
   chevron?: "collapsed" | "expanded";
 };
 
-function RowView({
+// ⚡ Bolt: Adding React.memo to RowView prevents unnecessary re-renders of all
+// items in the large event list when the user scrolls or when a single item changes
+// its selection state, improving rendering performance.
+const RowView = memo(function RowView({
   label,
   preview,
   time,
@@ -199,7 +202,7 @@ function RowView({
       </span>
     </button>
   );
-}
+});
 
 type RowProps = {
   rows: FlatRow[];
