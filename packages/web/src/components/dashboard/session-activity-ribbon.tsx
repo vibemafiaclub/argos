@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, useRef } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   formatSlashCommandText,
   buildTimelineGroups,
@@ -158,19 +158,17 @@ export function SessionActivityRibbon({
 
   const groups = useMemo(() => buildTimelineGroups(events), [events])
 
-  if (events.length === 0) return null
-
-  const trackMouse = (e: React.MouseEvent) => {
+  const trackMouse = useCallback((e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return e.clientX
     return e.clientX - rect.left
-  }
+  }, [])
 
-  const handleEventHover = (idx: number) => (e: React.MouseEvent) => {
+  const handleEventHover = useCallback((idx: number) => (e: React.MouseEvent) => {
     setHover({ kind: 'event', idx, x: trackMouse(e) })
-  }
+  }, [trackMouse])
 
-  const handleMergedHover = (
+  const handleMergedHover = useCallback((
     firstIdx: number,
     toolName: string,
     count: number,
@@ -184,77 +182,28 @@ export function SessionActivityRibbon({
       firstEvent,
       x: trackMouse(e),
     })
-  }
+  }, [trackMouse])
 
-  const segments: React.ReactNode[] = []
-  for (const group of groups) {
-    if (group.kind === 'single') {
-      const { event, idx } = group
-      const { bg, style } = segmentVisuals(event)
-      const selected = idx === selectedIdx
-      segments.push(
-        <button
-          key={`s-${idx}`}
-          type="button"
-          style={style}
-          onClick={() => onSelect(idx)}
-          onMouseEnter={handleEventHover(idx)}
-          onMouseMove={handleEventHover(idx)}
-          onMouseLeave={() => setHover(null)}
-          aria-label={`Event ${idx + 1}`}
-          className={`h-full ${bg} transition-opacity ${
-            selected
-              ? 'outline outline-2 outline-offset-[-2px] outline-foreground'
-              : 'hover:opacity-70'
-          }`}
-        />,
-      )
-      continue
-    }
+  const handleMouseLeave = useCallback(() => {
+    setHover(null)
+  }, [])
 
-    if (group.items.length === 1) {
-      const { event, idx } = group.items[0]
-      const { bg, style } = segmentVisuals(event)
-      const selected = idx === selectedIdx
-      segments.push(
-        <button
-          key={`gs-${idx}`}
-          type="button"
-          style={style}
-          onClick={() => onSelect(idx)}
-          onMouseEnter={handleEventHover(idx)}
-          onMouseMove={handleEventHover(idx)}
-          onMouseLeave={() => setHover(null)}
-          aria-label={`Event ${idx + 1}`}
-          className={`h-full ${bg} transition-opacity ${
-            selected
-              ? 'outline outline-2 outline-offset-[-2px] outline-foreground'
-              : 'hover:opacity-70'
-          }`}
-        />,
-      )
-      continue
-    }
-
-    const firstIdx = group.items[0].idx
-    const lastIdx = group.items[group.items.length - 1].idx
-    const containsSelected =
-      selectedIdx !== null && selectedIdx >= firstIdx && selectedIdx <= lastIdx
-    const isExpanded = expandedGroups.has(firstIdx) || containsSelected
-
-    if (isExpanded) {
-      for (const { event, idx } of group.items) {
+  const segments = useMemo(() => {
+    const items: React.ReactNode[] = []
+    for (const group of groups) {
+      if (group.kind === 'single') {
+        const { event, idx } = group
         const { bg, style } = segmentVisuals(event)
         const selected = idx === selectedIdx
-        segments.push(
+        items.push(
           <button
-            key={`gc-${idx}`}
+            key={`s-${idx}`}
             type="button"
             style={style}
             onClick={() => onSelect(idx)}
             onMouseEnter={handleEventHover(idx)}
             onMouseMove={handleEventHover(idx)}
-            onMouseLeave={() => setHover(null)}
+            onMouseLeave={handleMouseLeave}
             aria-label={`Event ${idx + 1}`}
             className={`h-full ${bg} transition-opacity ${
               selected
@@ -263,36 +212,94 @@ export function SessionActivityRibbon({
             }`}
           />,
         )
+        continue
       }
-      continue
-    }
 
-    segments.push(
-      <button
-        key={`gh-${firstIdx}`}
-        type="button"
-        style={{ flex: '0 0 10px' }}
-        onClick={() => onToggleGroup(firstIdx)}
-        onMouseEnter={handleMergedHover(
-          firstIdx,
-          group.toolName,
-          group.items.length,
-          group.items[0].event,
-        )}
-        onMouseMove={handleMergedHover(
-          firstIdx,
-          group.toolName,
-          group.items.length,
-          group.items[0].event,
-        )}
-        onMouseLeave={() => setHover(null)}
-        aria-label={`${group.toolName} x${group.items.length}`}
-        className={`relative h-full ${segmentVisuals(group.items[0].event).bg} transition-opacity hover:opacity-70`}
-      >
-        <span className="pointer-events-none absolute inset-y-1 left-1/2 -translate-x-1/2 w-px bg-background/50" />
-      </button>,
-    )
-  }
+      if (group.items.length === 1) {
+        const { event, idx } = group.items[0]
+        const { bg, style } = segmentVisuals(event)
+        const selected = idx === selectedIdx
+        items.push(
+          <button
+            key={`gs-${idx}`}
+            type="button"
+            style={style}
+            onClick={() => onSelect(idx)}
+            onMouseEnter={handleEventHover(idx)}
+            onMouseMove={handleEventHover(idx)}
+            onMouseLeave={handleMouseLeave}
+            aria-label={`Event ${idx + 1}`}
+            className={`h-full ${bg} transition-opacity ${
+              selected
+                ? 'outline outline-2 outline-offset-[-2px] outline-foreground'
+                : 'hover:opacity-70'
+            }`}
+          />,
+        )
+        continue
+      }
+
+      const firstIdx = group.items[0].idx
+      const lastIdx = group.items[group.items.length - 1].idx
+      const containsSelected =
+        selectedIdx !== null && selectedIdx >= firstIdx && selectedIdx <= lastIdx
+      const isExpanded = expandedGroups.has(firstIdx) || containsSelected
+
+      if (isExpanded) {
+        for (const { event, idx } of group.items) {
+          const { bg, style } = segmentVisuals(event)
+          const selected = idx === selectedIdx
+          items.push(
+            <button
+              key={`gc-${idx}`}
+              type="button"
+              style={style}
+              onClick={() => onSelect(idx)}
+              onMouseEnter={handleEventHover(idx)}
+              onMouseMove={handleEventHover(idx)}
+              onMouseLeave={handleMouseLeave}
+              aria-label={`Event ${idx + 1}`}
+              className={`h-full ${bg} transition-opacity ${
+                selected
+                  ? 'outline outline-2 outline-offset-[-2px] outline-foreground'
+                  : 'hover:opacity-70'
+              }`}
+            />,
+          )
+        }
+        continue
+      }
+
+      items.push(
+        <button
+          key={`gh-${firstIdx}`}
+          type="button"
+          style={{ flex: '0 0 10px' }}
+          onClick={() => onToggleGroup(firstIdx)}
+          onMouseEnter={handleMergedHover(
+            firstIdx,
+            group.toolName,
+            group.items.length,
+            group.items[0].event,
+          )}
+          onMouseMove={handleMergedHover(
+            firstIdx,
+            group.toolName,
+            group.items.length,
+            group.items[0].event,
+          )}
+          onMouseLeave={handleMouseLeave}
+          aria-label={`${group.toolName} x${group.items.length}`}
+          className={`relative h-full ${segmentVisuals(group.items[0].event).bg} transition-opacity hover:opacity-70`}
+        >
+          <span className="pointer-events-none absolute inset-y-1 left-1/2 -translate-x-1/2 w-px bg-background/50" />
+        </button>,
+      )
+    }
+    return items
+  }, [groups, selectedIdx, expandedGroups, onSelect, onToggleGroup, handleEventHover, handleMergedHover, handleMouseLeave])
+
+  if (events.length === 0) return null
 
   return (
     <div ref={containerRef} className="relative">
