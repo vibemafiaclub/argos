@@ -94,9 +94,10 @@ export function CreateOrgModal({ open, onOpenChange }: CreateOrgModalProps) {
               autoFocus
               disabled={mutation.isPending}
               aria-invalid={!!errorMessage || undefined}
+              aria-describedby={errorMessage ? "create-org-error" : undefined}
             />
             {errorMessage && (
-              <p className="text-xs text-destructive">{errorMessage}</p>
+              <p id="create-org-error" role="alert" className="text-xs text-destructive">{errorMessage}</p>
             )}
           </div>
 

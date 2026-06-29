@@ -90,9 +90,10 @@ export function RenameProjectModal({
               disabled={mutation.isPending}
               autoComplete="off"
               aria-invalid={!!errorMessage || undefined}
+              aria-describedby={errorMessage ? "rename-project-error" : undefined}
             />
             {errorMessage && (
-              <p className="text-xs text-destructive">{errorMessage}</p>
+              <p id="rename-project-error" role="alert" className="text-xs text-destructive">{errorMessage}</p>
             )}
           </div>
 

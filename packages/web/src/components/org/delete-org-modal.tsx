@@ -88,9 +88,11 @@ export function DeleteOrgModal({
             placeholder={orgName}
             disabled={mutation.isPending}
             autoComplete="off"
+            aria-invalid={!!errorMessage || undefined}
+            aria-describedby={errorMessage ? "delete-org-error" : undefined}
           />
           {errorMessage && (
-            <p className="text-xs text-destructive">{errorMessage}</p>
+            <p id="delete-org-error" role="alert" className="text-xs text-destructive">{errorMessage}</p>
           )}
         </div>
 
